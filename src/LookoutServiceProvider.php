@@ -58,9 +58,9 @@ class LookoutServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'lookout');
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
-        $this->defineConnection(Lookout::connection());
+        $this->defineConnection();
         if (Sources::enabled()) {
-            $this->defineConnection(Sources::connectionName());
+            $this->defineMonitoringConnection(Sources::connectionName());
             $this->loadMigrationsFrom(__DIR__.'/../database/sources');
         }
         $this->rateLimiter();
@@ -196,7 +196,11 @@ class LookoutServiceProvider extends ServiceProvider
      */
     protected function defineConnection(): void
     {
-        $name = Lookout::connection();
+        $this->defineMonitoringConnection(Lookout::connection());
+    }
+
+    private function defineMonitoringConnection(string $name): void
+    {
         if (config("database.connections.{$name}") !== null || ! is_array($nightowl = config('nightowl.database'))) {
             return;
         }

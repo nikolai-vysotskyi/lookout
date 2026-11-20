@@ -4,6 +4,12 @@ All notable changes to Lookout are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-20
+
+### Fixed
+
+- Configure the default OTLP writer connection from NightOwl settings when projects are enabled.
+
 ## [0.4.0] - 2026-11-20
 
 ### Added
