@@ -24,26 +24,94 @@ async function vException(fp) {
 }
 
 // ---------- queries ----------
+function serviceColumn(catalog) {
+  const projectLabels = new Map(catalog.projects.map(project => [project.slug, project.label]));
+  return {
+    k: 'service_label', label: 'Service', w: 'minmax(115px,150px)',
+    r: row => {
+      const service = esc(row.service_label || '—');
+      const project = !S.project && projectLabels.size > 1 && projectLabels.get(row.project || row.service?.split('/')[0]);
+      return project
+        ? `<div class="cell2"><span class="ell" title="${service}">${service}</span><small title="${esc(project)}">${esc(project)}</small></div>`
+        : `<span class="ell" title="${service}">${service}</span>`;
+    },
+  };
+}
+const connectionCol = { k: 'connection', label: 'Connection', w: '120px', r: x => `<span class="mono" style="font-size:13px">${esc(x.connection || '—')}</span>` };
+const queryPath = x => x.source_id != null ? `queries/otlp/${x.source_id}/${x.group_hash}` : 'queries/' + x.group_hash;
 async function vQueries() {
-  const conn = VS.conn || null; const id = 'queries' + (conn || '');
-  const cols = [{ k: 'sql', label: 'Query', w: 'minmax(360px,1fr)', r: x => `<span class="path" style="font-size:13px">${ic('db', 15)}<span class="ell" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</span></span>` }, { k: 'connection', label: 'Connection', w: '120px', r: x => `<span class="mono" style="font-size:13px">${esc(x.connection || '—')}</span>` }, cNum('calls', 'Calls', '80px', fmtN, 'calls'), { k: 'total_ms', label: 'Total', w: '96px', num: 1, api: 'total_ms', r: x => fmtD(x.total_ms) }, cDur('avg_ms', 'AVG', '90px', null, 'avg_ms'), { k: 'p95_ms', label: 'P95', w: '96px', num: 1, api: 'p95_ms', r: x => `<span class="${x.p95_ms > 200 ? 'over' : ''}">${fmtD(x.p95_ms)}</span>` }];
-  const d = await api('/queries', { ...wp(), limit: 100, connection: conn || '', ...listParams(id, cols, { k: 'total_ms', d: -1 }) }); WIN = d.window; const s = d.series;
-  const pill = `<button class="pill ${conn ? 'active' : ''}" data-act="connFilter" data-arg="${esc((d.connections || []).join('|'))}">${ic('db', 15)}${esc(conn || 'All connections')}${ic(conn ? 'x' : 'cd', 13)}</button>`;
-  const np = d.n_plus_one.suspects;
-  return pageHead('Queries', pill) + `<div class="charts grid2">${simpleBars(s, 'calls', 'Calls')}${durCard(s, avgOf(s), p95Max(s))}</div>`
+  const catalog = await sources();
+  const params = scopedWp();
+  const includesNightOwl = !BOOT.sources_enabled || catalog.services.some(service =>
+    service.connector === 'nightowl' && (!params.project || service.project === params.project)
+    && (!params.service || service.key === params.service)
+    && (!params.environment || !service.environment || params.environment === service.environment));
+  const conn = includesNightOwl ? VS.conn || null : null;
+  const id = 'queries' + (conn || '');
+  const cols = [
+    { k: 'sql', label: 'Query', w: 'minmax(360px,1fr)', r: x => `<span class="path" style="font-size:13px">${ic('db', 15)}<span class="ell" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</span></span>` },
+    ...(BOOT.sources_enabled ? [serviceColumn(catalog)] : []),
+    ...(includesNightOwl ? [connectionCol] : []),
+    cNum('calls', 'Calls', '80px', fmtN, 'calls'),
+    { k: 'total_ms', label: 'Total', w: '96px', num: 1, api: 'total_ms', r: x => fmtD(x.total_ms) },
+    cDur('avg_ms', 'AVG', '90px', null, 'avg_ms'),
+    { k: 'p95_ms', label: 'P95', w: '96px', num: 1, api: 'p95_ms', r: x => `<span class="${x.p95_ms > 200 ? 'over' : ''}">${fmtD(x.p95_ms)}</span>` },
+  ];
+  const d = await api('/queries', { ...params, limit: 100, connection: conn, ...listParams(id, cols, { k: 'total_ms', d: -1 }) });
+  WIN = d.window;
+  const s = d.series;
+  const incompleteP95 = s.some(bucket => bucket.calls > 0 && bucket.p95_ms == null);
+  const connections = d.connections || [];
+  const pill = (conn || connections.length)
+    ? `<button class="pill ${conn ? 'active' : ''}" data-act="connFilter" data-arg="${esc(connections.join('|'))}">${ic('db', 15)}${esc(conn || 'All connections')}${ic(conn ? 'x' : 'cd', 13)}</button>` : '';
+  return pageHead('Queries', pill) + scopeControls(catalog)
+    + (s.length ? `<div class="charts grid2">${simpleBars(s, 'calls', 'Calls')}${durCard(s, avgOf(s), incompleteP95 ? null : p95Max(s), 'Duration', incompleteP95 ? [null, null] : null)}</div>` : '')
     + listHeader({ icon: 'db', title: `${d.queries.length}${d.queries.length === 100 ? '+' : ''} queries`, tableId: id, viewToggle: false, placeholder: 'Search queries' })
-    + table(id, cols, d.queries, { go: x => 'queries/' + x.group_hash, serverQ: 1 })
-    + `<div style="height:36px"></div><div class="lh"><span class="li">${ic('alert', 20)}</span><h3>Possible N+1 queries</h3><span class="mut" style="font-size:13px">Same query 5+ times in one execution, last 24 hours at most</span></div>`
-    + table('np1', [{ k: 'sql', label: 'Query', w: 'minmax(300px,1fr)', r: x => `<div class="cell2"><b class="mono" style="font-size:13px" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</b><small>${esc(x.file ? x.file + (x.line ? ':' + x.line : '') : 'no source')}</small></div>` }, cNum('executions', 'Executions', '100px'), cNum('queries', 'Queries', '90px'), cNum('max_per_execution', 'Max / exec', '100px'), { k: 'total_ms', label: 'Total', w: '96px', num: 1, r: x => fmtD(x.total_ms) }], np,
+    + table(id, cols, d.queries, { go: queryPath, serverQ: 1 })
+    + (d.n_plus_one ? possibleRepeatedQueries(d.n_plus_one.suspects) : '');
+}
+function possibleRepeatedQueries(suspects) {
+  return `<div style="height:36px"></div><div class="lh"><span class="li">${ic('alert', 20)}</span><h3>Possible N+1 queries</h3><span class="mut" style="font-size:13px">Same query 5+ times in one execution, last 24 hours at most</span></div>`
+    + table('np1', [{ k: 'sql', label: 'Query', w: 'minmax(300px,1fr)', r: x => `<div class="cell2"><b class="mono" style="font-size:13px" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</b><small>${esc(x.file ? x.file + (x.line ? ':' + x.line : '') : 'no source')}</small></div>` }, cNum('executions', 'Executions', '100px'), cNum('queries', 'Queries', '90px'), cNum('max_per_execution', 'Max / exec', '100px'), { k: 'total_ms', label: 'Total', w: '96px', num: 1, r: x => fmtD(x.total_ms) }], suspects,
       { sort: { k: 'queries', d: -1 }, go: x => x.sample_execution_id ? 'requests/' + x.sample_execution_id : null, emptyText: 'No repeated queries found.' });
 }
-async function vQuery(hash) {
-  const d = await api('/queries/' + hash, wp()); WIN = d.window; const g = d.group;
-  return crumbs([['Queries', 'queries'], [(g.sql || '').slice(0, 60) + ((g.sql || '').length > 60 ? '…' : '')]]) + pageHead('Query') + `<div class="panel" style="padding:16px"><pre class="box" style="border:0;background:none;padding:4px">${sqlHi(g.sql || '')}</pre><div style="display:flex;gap:10px;padding:8px 4px 0;flex-wrap:wrap"><span class="badge-s">${esc(g.connection || '—')}</span><span class="badge-s">max ${fmtD(g.max_ms)}</span><button class="btn sm" data-act="copyText" data-arg="${esc(g.sql || '')}">${ic('copy', 13)}Copy</button></div></div>`
+async function vQuery(hash, sourceId = null) {
+  const path = sourceId === null ? '/queries/' + hash : `/queries/otlp/${sourceId}/${hash}`;
+  const d = await api(path, scopedWp());
+  WIN = d.window;
+  const g = d.group;
+  const origin = sourceId === null
+    ? { k: 'source', label: 'Source', w: 'minmax(240px,1fr)', v: x => x.execution_preview || '', r: x => `<span class="ell" style="display:flex;gap:8px;align-items:center">${srcBadge(x.source)}<span class="mono ell" style="font-size:13px">${esc(x.execution_preview || '—')}</span></span>` }
+    : { k: 'execution_preview', label: 'Service', w: 'minmax(240px,1fr)', r: x => `<div class="cell2"><b>${esc(g.service_label || '—')}</b><small class="mono">${esc(x.execution_preview || '')}</small></div>` };
+  return crumbs([['Queries', 'queries'], [(g.sql || '').slice(0, 60) + ((g.sql || '').length > 60 ? '…' : '')]]) + pageHead('Query') + `<div class="panel" style="padding:16px"><pre class="box" style="border:0;background:none;padding:4px">${sqlHi(g.sql || '')}</pre><div style="display:flex;gap:10px;padding:8px 4px 0;flex-wrap:wrap"><span class="badge-s">${esc(g.service_label || g.connection || '—')}</span><span class="badge-s">max ${fmtD(g.max_ms)}</span><button class="btn sm" data-act="copyText" data-arg="${esc(g.sql || '')}">${ic('copy', 13)}Copy</button></div></div>`
     + `<div class="charts grid2">${simpleBars(d.series, 'calls', 'Calls')}${durCard(d.series, g.avg_ms, g.p95_ms)}</div>`
     + listHeader({ icon: 'db', title: `${fmtInt(g.calls)} calls`, tableId: 'qcalls', viewToggle: false })
-    + table('qcalls', [dateCell(), { k: 'source', label: 'Source', w: 'minmax(240px,1fr)', v: x => x.execution_preview || '', r: x => `<span class="ell" style="display:flex;gap:8px;align-items:center">${srcBadge(x.source)}<span class="mono ell" style="font-size:13px">${esc(x.execution_preview || '—')}</span></span>` }, cDur('duration_ms', 'Duration', '110px')],
-      d.instances, { sort: { k: 'created_at', d: -1 }, go: x => execLink(x.source, x.execution_id), text: x => x.execution_preview || '', emptyText: 'No executions in the raw window (about 14 days).' });
+    + table('qcalls', [dateCell(), origin, cDur('duration_ms', 'Duration', '110px')], d.instances, {
+      sort: { k: 'created_at', d: -1 },
+      go: sourceId === null ? x => execLink(x.source, x.execution_id) : null,
+      text: x => x.execution_preview || '',
+      emptyText: sourceId === null ? 'No executions in the raw window (about 14 days).' : 'No telemetry in this period.',
+    });
+}
+
+// ---------- worker progress ----------
+async function vWorkerProgress() {
+  const [catalog, d] = await Promise.all([sources(), api('/worker-progress', scopedWp())]);
+  WIN = d.window;
+  const header = pageHead('Worker progress') + scopeControls(catalog);
+  if (!d.available) {
+    return header + `<div class="empty">${S.service ? 'Worker progress is unavailable for this service.' : 'No successful runs in this period.'}</div>`;
+  }
+
+  const service = serviceColumn(catalog);
+  const operation = { k: 'operation', label: 'Operation', w: 'minmax(160px,1fr)' };
+  const progress = table('worker-progress', [service, operation, dateCell('last_success_at', '195px', 'Last successful run')], d.progress,
+    { minw: 500, sort: { k: 'last_success_at', d: -1 }, emptyText: 'No successful runs in this period.' });
+  const errors = d.errors.length ? `<section class="worker-errors"><div class="lh"><h3>Errors</h3></div>
+    ${table('worker-errors', [service, operation, cNum('count', 'Count'), dateCell('last_seen_at', '195px', 'Last seen')], d.errors,
+      { minw: 600, sort: { k: 'last_seen_at', d: -1 } })}</section>` : '';
+
+  return header + progress + errors;
 }
 
 // ---------- notifications & mail ----------

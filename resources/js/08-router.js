@@ -1,6 +1,6 @@
 // ---------- router ----------
 // Paths under BASE; every view is async and returns HTML. Window params ride along in the query string so a link
-// (Share) opens the same period and environment.
+// (Share) opens the same period, environment, project and service on supported views.
 const H = '([0-9a-f]{32})', U = '([0-9a-f-]{36})';
 const ROUTER = [
   [/^$/, () => vDashboard(), 'dashboard'], [/^issues$/, () => vIssues(), 'issues'], [/^issues\/(\d+)$/, m => vIssue(m[1]), 'issues'],
@@ -10,16 +10,34 @@ const ROUTER = [
   [/^scheduled-tasks$/, () => vScheduled(), 'scheduled-tasks'], [/^scheduled-tasks\/runs\/([0-9]+|[0-9a-f-]{36})$/, m => vRun(m[1], 'task'), 'scheduled-tasks'], [new RegExp('^scheduled-tasks/' + H + '$'), m => vTask(m[1]), 'scheduled-tasks'],
   [/^exceptions$/, () => vExceptions(), 'exceptions'], [new RegExp('^exceptions/' + H + '$'), m => vException(m[1]), 'exceptions'],
   [/^queries$/, () => vQueries(), 'queries'], [new RegExp('^queries/' + H + '$'), m => vQuery(m[1]), 'queries'],
+  ...(BOOT.sources_enabled ? [
+    [/^queries\/otlp\/(\d+)\/([0-9a-f]{32,64})$/, m => vQuery(m[2], m[1]), 'queries'],
+    [/^worker-progress$/, () => vWorkerProgress(), 'worker-progress'],
+  ] : []),
   [/^notifications$/, () => vNotifications(), 'notifications'], [new RegExp('^notifications/' + H + '$'), m => vNotification(m[1]), 'notifications'],
   [/^mail$/, () => vMail(), 'mail'], [new RegExp('^mail/' + H + '$'), m => vMailable(m[1]), 'mail'],
   [/^cache$/, () => vCache(), 'cache'], [/^outgoing$/, () => vOutgoing(), 'outgoing'], [new RegExp('^outgoing/' + H + '$'), m => vDomain(m[1]), 'outgoing'],
   [/^users$/, () => vUsers(), 'users'], [/^users\/([^/]+)$/, m => vUser(decodeURIComponent(m[1])), 'users'], [/^logs$/, () => vLogs(), 'logs'],
   [/^settings$/, () => vSettings(), 'settings'], [/^mcp$/, () => vMcp(), 'mcp'],
 ];
-const TITLES = { dashboard: 'Dashboard', issues: 'Issues', requests: 'Requests', jobs: 'Jobs', commands: 'Commands', 'scheduled-tasks': 'Scheduled Tasks', exceptions: 'Exceptions', queries: 'Queries', notifications: 'Notifications', mail: 'Mail', cache: 'Cache', outgoing: 'Outgoing Requests', users: 'Users', logs: 'Logs', settings: 'Settings', mcp: 'MCP' };
+const TITLES = { dashboard: 'Dashboard', issues: 'Issues', requests: 'Requests', jobs: 'Jobs', commands: 'Commands', 'scheduled-tasks': 'Scheduled Tasks', exceptions: 'Exceptions', queries: 'Queries', 'worker-progress': 'Worker progress', notifications: 'Notifications', mail: 'Mail', cache: 'Cache', outgoing: 'Outgoing Requests', users: 'Users', logs: 'Logs', settings: 'Settings', mcp: 'MCP' };
 const curRel = () => { const p = decodeURIComponent(location.pathname); return (p.startsWith(BASE) ? p.slice(BASE.length) : p).replace(/^\/+|\/+$/g, ''); };
-function query() { const q = new URLSearchParams(); if (S.period === 'custom') { q.set('from', S.from); q.set('to', S.to); } else if (S.period !== '24h') q.set('period', S.period); if (S.env) q.set('env', S.env); const s = q.toString(); return s ? '?' + s : ''; }
-const urlFor = rel => BASE + (rel ? '/' + rel : '') + query();
+function query(rel) {
+  const scoped = BOOT.sources_enabled && (rel === 'worker-progress' || /^queries(?:\/|$)/.test(rel));
+  const q = new URLSearchParams();
+  if (S.period === 'custom') {
+    q.set('from', S.from);
+    q.set('to', S.to);
+  } else if (scoped || S.period !== '24h') {
+    q.set('period', S.period);
+  }
+  if (scoped || S.env) q.set('env', S.env || '');
+  if (scoped && S.project) q.set('project', S.project);
+  if (scoped && S.service) q.set('service', S.service);
+  const params = q.toString();
+  return params ? '?' + params : '';
+}
+const urlFor = rel => BASE + (rel ? '/' + rel : '') + query(rel);
 let PENDING = null; // VS seeded for the next page (e.g. a search from a trace span)
 function go(rel, seed = null) { closeDrawer(); closePop(); PENDING = seed; history.pushState(null, '', urlFor(rel)); render(); }
 let curPath = null, seq = 0;
@@ -33,12 +51,22 @@ async function render(keepScroll) {
   try { html = route ? await route[1](m) : errorHtml({ status: 404, message: 'This page does not exist.' }); }
   catch (e) { if (!(e instanceof ApiError)) console.error(e); html = errorHtml(e); }
   if (my !== seq) return; bar.classList.remove('on');
-  const focus = document.activeElement && document.activeElement.matches('input[data-search],input[data-isearch],input[data-logsearch]') ? { sel: document.activeElement.dataset.search ? `[data-search="${document.activeElement.dataset.search}"]` : document.activeElement.dataset.isearch ? '[data-isearch]' : '#logq', pos: document.activeElement.selectionStart } : null;
+  const active = document.activeElement;
+  const filter = active?.dataset.scopeField;
+  const input = active?.matches('input[data-search],input[data-isearch],input[data-logsearch]');
+  const focus = filter ? '[data-scope-field="' + filter + '"]'
+    : input ? (active.dataset.search ? '[data-search="' + active.dataset.search + '"]' : active.dataset.isearch ? '[data-isearch]' : '#logq') : null;
+  const selection = input ? active.selectionStart : null;
   for (const k in CH) if (!html.includes(`data-chart="${k}"`)) delete CH[k];
   $('#page').innerHTML = html;
   if (TL) renderTL();
   main.scrollTop = keepScroll ? st : 0;
-  if (focus) { const n = $(focus.sel); if (n) { n.focus(); try { n.setSelectionRange(focus.pos, focus.pos); } catch (e) { /* number inputs */ } } }
+  if (focus && $(focus)) {
+    const next = $(focus);
+    next.focus({ preventScroll: true });
+    if (selection !== null) next.setSelectionRange(selection, selection);
+  }
+  $('#current-environment').textContent = S.env || 'All environments';
   document.body.classList.remove('nav-open');
   if (OPEN_ISSUES == null) refreshBadge();
 }

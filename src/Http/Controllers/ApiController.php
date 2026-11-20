@@ -14,7 +14,10 @@ use Lookout\Services\Details;
 use Lookout\Services\IssueEditor;
 use Lookout\Services\Issues;
 use Lookout\Services\IssueStatus;
+use Lookout\Services\QuerySources;
 use Lookout\Services\Raw;
+use Lookout\Services\Sources;
+use Lookout\Services\SourceTelemetry;
 use Lookout\Services\Telemetry;
 
 /**
@@ -217,26 +220,68 @@ class ApiController extends Controller
         return $payload === null ? response()->json(['message' => $missing], 404) : response()->json($payload);
     }
 
-    public function queries(WindowRequest $request): JsonResponse
+    public function sources(Sources $sources): JsonResponse
+    {
+        return response()->json($sources->catalog());
+    }
+
+    public function queries(WindowRequest $request, Sources $sources, QuerySources $queries): JsonResponse
     {
         $sort = $request->sort([...self::ROLLUP_SORTS, 'max_ms'], 'total_ms');
         $window = $request->window();
+        $project = $request->validated('project');
+        $service = $request->validated('service');
+        $environment = $request->environment();
+        $connection = $request->validated('connection');
+        $scope = $sources->scoped($project, $service, $environment);
+        $nightowl = QuerySources::includesNightowl($scope, $project, $service);
 
         return response()->json([
             'window' => $window->toArray(),
             'sort' => $sort,
             'direction' => $request->direction(),
-            'connection' => $request->input('connection'),
-            'connections' => $this->telemetry->queryConnections($window, $request->environment()),
-            'series' => $this->telemetry->querySeries($window, $request->environment(), $request->input('connection')),
-            'queries' => $this->telemetry->queries($window, $request->environment(), $sort, $request->direction(), $request->limit(), $request->input('q'), $request->input('connection')),
-            'n_plus_one' => $this->raw->nPlusOne($window, $request->environment(), (int) ($request->input('min_per_execution') ?? 5), min($request->limit(), 50)),
+            'connection' => $connection,
+            'connections' => $nightowl ? $this->telemetry->queryConnections($window, $environment) : [],
+            'series' => $queries->series($window, $scope, $nightowl, $environment, $connection),
+            'queries' => $queries->list($window, $scope, $nightowl, $environment, $sort, $request->direction(), $request->limit(), $request->input('q'), $connection),
+            'n_plus_one' => $nightowl
+                ? $this->raw->nPlusOne($window, $environment, (int) ($request->input('min_per_execution') ?? 5), min($request->limit(), 50))
+                : null,
         ]);
     }
 
-    public function query(WindowRequest $request, string $groupHash): JsonResponse
+    public function query(WindowRequest $request, string $groupHash, Sources $sources): JsonResponse
     {
-        return self::found($this->details->query($groupHash, $request->window(), $request->environment()), 'Query not found in this window.');
+        $project = $request->validated('project');
+        $service = $request->validated('service');
+        $scope = $sources->scoped($project, $service, $request->environment());
+        $details = QuerySources::includesNightowl($scope, $project, $service)
+            ? $this->details->query($groupHash, $request->window(), $request->environment())
+            : null;
+
+        return self::found($details, 'Query not found in this window.');
+    }
+
+    public function sourceQuery(WindowRequest $request, int $sourceId, string $fingerprint, Sources $sources, SourceTelemetry $telemetry): JsonResponse
+    {
+        $scope = $sources->scoped($request->validated('project'), $request->validated('service'), $request->environment());
+        $source = QuerySources::external($scope)->firstWhere('id', $sourceId);
+        $details = $source === null ? null : $telemetry->queryDetail($request->window(), $source, $fingerprint);
+
+        return self::found($details, 'Query not found in this window.');
+    }
+
+    public function workerProgress(WindowRequest $request, Sources $sources, SourceTelemetry $telemetry): JsonResponse
+    {
+        $window = $request->window();
+        $scope = $sources->scoped($request->validated('project'), $request->validated('service'), $request->environment());
+        $external = QuerySources::external($scope);
+
+        return response()->json([
+            'window' => $window->toArray(),
+            'available' => $external->isNotEmpty(),
+            ...$telemetry->activity($window, $external),
+        ]);
     }
 
     public function outgoing(WindowRequest $request): JsonResponse

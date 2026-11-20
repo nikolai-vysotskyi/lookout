@@ -19,8 +19,18 @@ const A = {
   },
   toggleActivity() { S.activityOpen = !S.activityOpen; render(true); },
   async env(_, el) {
-    if (!ENVS) { try { ENVS = (await api('/overview', { period: '1h' })).environments; } catch (e) { ENVS = []; } }
-    openPop(el, menu([{ label: 'Environment' }, { t: 'All environments', v: '' }, ...ENVS.map(e => ({ t: e, v: e }))], S.env || ''), v => { S.env = v || null; store.set('env', S.env); windowChanged(); });
+    const [legacy, catalog] = await Promise.all([
+      ENVS ? Promise.resolve(ENVS) : api('/overview', { period: '1h' }).then(d => d.environments || []).catch(() => []),
+      sources().catch(() => ({ services: [] })),
+    ]);
+    if (!el.isConnected) return;
+    const envs = [...new Set([...legacy, ...catalog.services.map(service => service.environment).filter(Boolean), ...(S.env ? [S.env] : [])])].sort();
+    openPop(el, menu([{ label: 'Environment' }, { t: 'All environments', v: '' }, ...envs.map(e => ({ t: e, v: e }))], S.env || ''), v => {
+      if (S.env !== (v || null)) VS.conn = null;
+      S.env = v || null;
+      store.set('env', S.env);
+      windowChanged();
+    });
   },
   userMenu(_, el) {
     openPop(el, menu([{ label: 'Theme' }, { t: 'Dark', v: 'dark', icon: ic('moon', 15) }, { t: 'Light', v: 'light', icon: ic('sun', 15) }, { t: 'System', v: 'system', icon: ic('app', 15) }, ...(HOME || LOGOUT ? ['-'] : []), ...(HOME ? [{ t: HOME.label, v: 'home', icon: ic('ext', 15) }] : []), ...(LOGOUT ? [{ t: 'Sign out', v: 'out', icon: ic('out2', 15) }] : [])], S.theme), async v => {
@@ -151,6 +161,17 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const t = e.target;
+  const scope = t.dataset.scopeField;
+  if (scope === 'project' || scope === 'service') {
+    const value = t.value || null;
+    if (S[scope] === value) return;
+    S[scope] = value;
+    if (scope === 'project' && (!value || !S.service?.startsWith(value + '/'))) S.service = null;
+    VS.conn = null;
+    history.pushState(null, '', urlFor(curRel()));
+    render(true);
+    return;
+  }
   if (t.dataset.thtype) { fillTargets(t.value); $('#th-target').placeholder = THR_HINT[t.value] || ''; }
   if (t.dataset.chtype) { const v = t.value, tg = v === 'telegram'; VS.chType = v; $('#ch-secret-f').style.display = v === 'webhook' ? '' : 'none'; $('#ch-url-f').style.display = tg ? 'none' : ''; $('#ch-tg-f').style.display = tg ? '' : 'none'; $('#ch-help').textContent = CH_HELP[v] || CH_HELP.webhook; }
 });
@@ -160,15 +181,20 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('[data-popsearch]') && popCb) { const vis = $$('#poplist .pi').filter(p => !p.hidden); const cb = popCb; if (vis.length === 1) { closePop(); cb(vis[0].dataset.pick); } else if (!vis.length && /^[A-Za-z0-9_.@:-]+$/.test(e.target.value.trim())) { closePop(); cb(e.target.value.trim()); } }
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-act][tabindex],[data-sort][tabindex],[data-log][tabindex],[data-pick][tabindex]')) { e.preventDefault(); e.target.click(); }
 });
-window.addEventListener('popstate', () => render());
+window.addEventListener('popstate', () => {
+  const { project, service, env } = S;
+  readWindowUrl();
+  if (project !== S.project || service !== S.service || env !== S.env) VS.conn = null;
+  if (env !== S.env) OPEN_ISSUES = null;
+  render();
+});
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (S.theme === 'system') applyTheme(); });
 
 // ---------- boot ----------
 (function boot() {
   const root = document.getElementById('lookout-app');
-  root.innerHTML = `<div class="app"><aside class="side" id="side"></aside><main class="main" id="main"><div id="busy" aria-hidden="true"></div><div class="topbar"><button class="burger" data-act="nav" aria-label="Menu">${ic('menu', 18)}</button><b>${esc(BOOT.app_name || 'Lookout')}</b><span class="mut ell">${esc(S.env || 'All environments')}</span></div><div class="page" id="page"></div></main></div><div id="ov" data-act="closeDrawer"></div><aside id="drawer" aria-hidden="true" aria-label="Details"><div class="dr-h"><button class="x" data-act="closeDrawer" aria-label="Close">${ic('x', 16)}</button><div id="dr-t" class="ell"></div></div><div class="dr-b" id="dr-b"></div></aside><div id="pop" role="listbox"></div><div id="tip" role="tooltip"></div><div id="toast" role="status" aria-live="polite"></div>`;
+  root.innerHTML = `<div class="app"><aside class="side" id="side"></aside><main class="main" id="main"><div id="busy" aria-hidden="true"></div><div class="topbar"><button class="burger" data-act="nav" aria-label="Menu">${ic('menu', 18)}</button><b>${esc(BOOT.app_name || 'Lookout')}</b><span class="mut ell" id="current-environment">${esc(S.env || 'All environments')}</span></div><div class="page" id="page"></div></main></div><div id="ov" data-act="closeDrawer"></div><aside id="drawer" aria-hidden="true" aria-label="Details"><div class="dr-h"><button class="x" data-act="closeDrawer" aria-label="Close">${ic('x', 16)}</button><div id="dr-t" class="ell"></div></div><div class="dr-b" id="dr-b"></div></aside><div id="pop" role="listbox"></div><div id="tip" role="tooltip"></div><div id="toast" role="status" aria-live="polite"></div>`;
   applyTheme();
-  if (location.search && S.period === 'custom' && !(Date.parse(S.to) > Date.parse(S.from))) { S.period = '24h'; S.from = S.to = null; }
   history.replaceState(null, '', urlFor(curRel()));
   render();
 })();

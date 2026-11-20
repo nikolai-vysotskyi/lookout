@@ -18,23 +18,38 @@ function hsh(s) { let h = 2166136261; for (const c of String(s)) { h ^= c.charCo
 
 const PERIODS = ['1h', '24h', '7d', '14d', '30d'];
 const PERIOD_TXT = { '1h': 'in the last hour', '24h': 'in the last 24 hours', '7d': 'in the last 7 days', '14d': 'in the last 14 days', '30d': 'in the last 30 days' };
-const S = { period: '24h', from: null, to: null, env: null, theme: 'dark', activityOpen: true };
+const S = { period: '24h', from: null, to: null, env: null, project: null, service: null, theme: 'dark', activityOpen: true };
 const store = {
   get(k) { try { return localStorage.getItem(PREFIX + k); } catch (e) { return null; } },
   set(k, v) { try { v == null ? localStorage.removeItem(PREFIX + k) : localStorage.setItem(PREFIX + k, v); } catch (e) { /* private mode */ } },
 };
-(() => {
-  const t = store.get('theme'); if (t) S.theme = t;
-  const p = store.get('period'); if (PERIODS.includes(p)) S.period = p;
-  const e = store.get('env'); if (e) S.env = e;
+function readWindowUrl(usePreferences = false) {
   const q = new URLSearchParams(location.search);
-  if (PERIODS.includes(q.get('period'))) S.period = q.get('period');
-  if (q.get('from') && q.get('to')) { S.from = q.get('from'); S.to = q.get('to'); S.period = 'custom'; }
-  if (q.has('env')) S.env = q.get('env') || null;
-})();
+  const period = q.get('period') || (usePreferences ? store.get('period') : null);
+  S.period = PERIODS.includes(period) ? period : '24h';
+  S.from = S.to = null;
+  if (Date.parse(q.get('to')) > Date.parse(q.get('from'))) {
+    S.from = q.get('from');
+    S.to = q.get('to');
+    S.period = 'custom';
+  }
+  S.env = q.has('env') ? q.get('env') || null : (usePreferences ? store.get('env') : null);
+  if (BOOT.sources_enabled) {
+    const project = q.get('project');
+    const service = q.get('service');
+    const slug = '[a-z0-9][a-z0-9_-]{0,63}';
+    S.project = project && new RegExp('^' + slug + '$').test(project) ? project : null;
+    S.service = service && new RegExp('^' + slug + '/' + slug + '$').test(service)
+      && (!S.project || service.startsWith(S.project + '/')) ? service : null;
+  }
+}
+S.theme = store.get('theme') || S.theme;
+readWindowUrl(true);
 const periodTxt = () => S.period === 'custom' ? `between ${S.from.slice(0, 10)} and ${S.to.slice(0, 10)}` : PERIOD_TXT[S.period];
 // Window params shared by every endpoint.
 const wp = () => ({ ...(S.period === 'custom' ? { from: S.from, to: S.to } : { period: S.period }), environment: S.env || '' });
+const scopeParams = () => BOOT.sources_enabled ? { project: S.project, service: S.service } : {};
+const scopedWp = () => ({ ...wp(), ...scopeParams() });
 
 function cookie(name) { const m = document.cookie.match('(?:^|; )' + name.replace(/[.$?*|{}()[\]\\/+^]/g, '\\$&') + '=([^;]*)'); return m ? decodeURIComponent(m[1]) : null; }
 class ApiError extends Error { constructor(status, message, errors) { super(message); this.status = status; this.errors = errors || null; } }
@@ -257,8 +272,28 @@ function periodSeg() {
   return `<div class="seg" role="group" aria-label="Period">${PERIODS.map(p => `<button class="${S.period === p ? 'on' : ''}" data-act="period" data-arg="${p}" aria-pressed="${S.period === p}">${p.toUpperCase()}</button>`).join('')}<button class="cal ${S.period === 'custom' ? 'on' : ''}" data-act="calendar" aria-label="Custom range" title="${S.period === 'custom' ? esc(periodTxt()) : 'Custom range'}">${ic('calendar', 15)}${ic('cd', 12)}</button></div>`;
 }
 function pageHead(title, right = '') { return `<div class="ph"><h1>${title}</h1><div class="grow"></div>${right}${periodSeg()}</div>`; }
+const sources = () => BOOT.sources_enabled ? api('/sources') : Promise.resolve({ projects: [], services: [] });
+function scopeControls({ projects, services }) {
+  if (!BOOT.sources_enabled) return '';
+
+  const option = (value, label, selected) => `<option value="${esc(value)}"${selected === value ? ' selected' : ''}>${esc(label)}</option>`;
+  const select = (field, label, all, options) => `<div class="scope-filter"><label for="scope-${field}">${label}</label><select id="scope-${field}" class="inp" data-scope-field="${field}">${option('', all, S[field] || '')}${options}</select></div>`;
+  const list = services.filter(service => !S.project || service.project === S.project);
+  const projectOptions = projects.map(project => option(project.slug, project.label, S.project)).join('');
+  const optionsFor = items => items.map(service => option(service.key, service.label, S.service)).join('');
+  const serviceOptions = S.project || projects.length <= 1 ? optionsFor(list) : projects.map(project => {
+    const items = list.filter(service => service.project === project.slug);
+    return items.length ? `<optgroup label="${esc(project.label)}">${optionsFor(items)}</optgroup>` : '';
+  }).join('');
+  const missingProject = S.project && !projects.some(project => project.slug === S.project)
+    ? option(S.project, S.project, S.project) : '';
+  const missingService = S.service && !list.some(service => service.key === S.service)
+    ? option(S.service, S.service, S.service) : '';
+
+  return `<div class="scope-filters">${select('project', 'Project', 'All projects', projectOptions + missingProject)}${select('service', 'Service', 'All services', serviceOptions + missingService)}</div>`;
+}
 function crumbs(items) { return `<div class="crumbs">${items.map((c, i) => (i ? ic('cr', 13) : '') + (c[1] != null ? `<a data-go="${esc(c[1])}">${esc(c[0])}</a>` : `<span class="ell" style="max-width:min(60vw,520px)">${esc(c[0])}</span>`)).join('')}</div>`; }
-const ACT = [['requests', 'Requests', 'globe'], ['jobs', 'Jobs', 'jobs'], ['commands', 'Commands', 'braces'], ['scheduled-tasks', 'Scheduled Tasks', 'calendar'], ['exceptions', 'Exceptions', 'alert'], ['queries', 'Queries', 'db'], ['notifications', 'Notifications', 'bell'], ['mail', 'Mail', 'mail'], ['cache', 'Cache', 'cache'], ['outgoing', 'Outgoing Requests', 'out']];
+const ACT = [['requests', 'Requests', 'globe'], ['jobs', 'Jobs', 'jobs'], ['commands', 'Commands', 'braces'], ['scheduled-tasks', 'Scheduled Tasks', 'calendar'], ['exceptions', 'Exceptions', 'alert'], ['queries', 'Queries', 'db'], ...(BOOT.sources_enabled ? [['worker-progress', 'Worker progress', 'clock']] : []), ['notifications', 'Notifications', 'bell'], ['mail', 'Mail', 'mail'], ['cache', 'Cache', 'cache'], ['outgoing', 'Outgoing Requests', 'out']];
 let OPEN_ISSUES = null; let ENVS = null;
 function sidebar(section) {
   const nv = (id, label, icon, extra = '') => `<a class="nv ${section === id ? 'on' : ''}" href="${BASE}/${id === 'dashboard' ? '' : id}" data-go="${id === 'dashboard' ? '' : id}">${ic(icon, 16)}<span>${label}</span>${extra}</a>`;
@@ -268,7 +303,7 @@ function sidebar(section) {
     ${nv('dashboard', 'Dashboard', 'grid')}
     ${nv('issues', 'Issues', 'inbox', OPEN_ISSUES != null ? `<span class="badge">${fmtN(OPEN_ISSUES)}</span>` : '')}
     <div class="nv ${S.activityOpen ? 'open' : ''}" data-act="toggleActivity" role="button" tabindex="0" aria-expanded="${S.activityOpen}">${ic('activity', 16)}<span>Activity</span><span class="chev">${ic('cr', 15)}</span></div>
-    ${S.activityOpen ? `<div class="sub">${ACT.map(a => `<a class="nv ${section === a[0] ? 'on' : ''}" href="${BASE}/${a[0]}" data-go="${a[0]}">${a[1]}</a>`).join('')}</div>` : ''}
+    ${S.activityOpen ? `<div class="sub">${ACT.map(a => `<a class="nv ${section === a[0] ? 'on' : ''}" href="${esc(urlFor(a[0]))}" data-go="${a[0]}">${a[1]}</a>`).join('')}</div>` : ''}
     <div class="navlabel">Monitoring</div>
     ${nv('users', 'Users', 'user')}
     ${nv('logs', 'Logs', 'logs')}
@@ -665,26 +700,94 @@ async function vException(fp) {
 }
 
 // ---------- queries ----------
+function serviceColumn(catalog) {
+  const projectLabels = new Map(catalog.projects.map(project => [project.slug, project.label]));
+  return {
+    k: 'service_label', label: 'Service', w: 'minmax(115px,150px)',
+    r: row => {
+      const service = esc(row.service_label || '—');
+      const project = !S.project && projectLabels.size > 1 && projectLabels.get(row.project || row.service?.split('/')[0]);
+      return project
+        ? `<div class="cell2"><span class="ell" title="${service}">${service}</span><small title="${esc(project)}">${esc(project)}</small></div>`
+        : `<span class="ell" title="${service}">${service}</span>`;
+    },
+  };
+}
+const connectionCol = { k: 'connection', label: 'Connection', w: '120px', r: x => `<span class="mono" style="font-size:13px">${esc(x.connection || '—')}</span>` };
+const queryPath = x => x.source_id != null ? `queries/otlp/${x.source_id}/${x.group_hash}` : 'queries/' + x.group_hash;
 async function vQueries() {
-  const conn = VS.conn || null; const id = 'queries' + (conn || '');
-  const cols = [{ k: 'sql', label: 'Query', w: 'minmax(360px,1fr)', r: x => `<span class="path" style="font-size:13px">${ic('db', 15)}<span class="ell" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</span></span>` }, { k: 'connection', label: 'Connection', w: '120px', r: x => `<span class="mono" style="font-size:13px">${esc(x.connection || '—')}</span>` }, cNum('calls', 'Calls', '80px', fmtN, 'calls'), { k: 'total_ms', label: 'Total', w: '96px', num: 1, api: 'total_ms', r: x => fmtD(x.total_ms) }, cDur('avg_ms', 'AVG', '90px', null, 'avg_ms'), { k: 'p95_ms', label: 'P95', w: '96px', num: 1, api: 'p95_ms', r: x => `<span class="${x.p95_ms > 200 ? 'over' : ''}">${fmtD(x.p95_ms)}</span>` }];
-  const d = await api('/queries', { ...wp(), limit: 100, connection: conn || '', ...listParams(id, cols, { k: 'total_ms', d: -1 }) }); WIN = d.window; const s = d.series;
-  const pill = `<button class="pill ${conn ? 'active' : ''}" data-act="connFilter" data-arg="${esc((d.connections || []).join('|'))}">${ic('db', 15)}${esc(conn || 'All connections')}${ic(conn ? 'x' : 'cd', 13)}</button>`;
-  const np = d.n_plus_one.suspects;
-  return pageHead('Queries', pill) + `<div class="charts grid2">${simpleBars(s, 'calls', 'Calls')}${durCard(s, avgOf(s), p95Max(s))}</div>`
+  const catalog = await sources();
+  const params = scopedWp();
+  const includesNightOwl = !BOOT.sources_enabled || catalog.services.some(service =>
+    service.connector === 'nightowl' && (!params.project || service.project === params.project)
+    && (!params.service || service.key === params.service)
+    && (!params.environment || !service.environment || params.environment === service.environment));
+  const conn = includesNightOwl ? VS.conn || null : null;
+  const id = 'queries' + (conn || '');
+  const cols = [
+    { k: 'sql', label: 'Query', w: 'minmax(360px,1fr)', r: x => `<span class="path" style="font-size:13px">${ic('db', 15)}<span class="ell" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</span></span>` },
+    ...(BOOT.sources_enabled ? [serviceColumn(catalog)] : []),
+    ...(includesNightOwl ? [connectionCol] : []),
+    cNum('calls', 'Calls', '80px', fmtN, 'calls'),
+    { k: 'total_ms', label: 'Total', w: '96px', num: 1, api: 'total_ms', r: x => fmtD(x.total_ms) },
+    cDur('avg_ms', 'AVG', '90px', null, 'avg_ms'),
+    { k: 'p95_ms', label: 'P95', w: '96px', num: 1, api: 'p95_ms', r: x => `<span class="${x.p95_ms > 200 ? 'over' : ''}">${fmtD(x.p95_ms)}</span>` },
+  ];
+  const d = await api('/queries', { ...params, limit: 100, connection: conn, ...listParams(id, cols, { k: 'total_ms', d: -1 }) });
+  WIN = d.window;
+  const s = d.series;
+  const incompleteP95 = s.some(bucket => bucket.calls > 0 && bucket.p95_ms == null);
+  const connections = d.connections || [];
+  const pill = (conn || connections.length)
+    ? `<button class="pill ${conn ? 'active' : ''}" data-act="connFilter" data-arg="${esc(connections.join('|'))}">${ic('db', 15)}${esc(conn || 'All connections')}${ic(conn ? 'x' : 'cd', 13)}</button>` : '';
+  return pageHead('Queries', pill) + scopeControls(catalog)
+    + (s.length ? `<div class="charts grid2">${simpleBars(s, 'calls', 'Calls')}${durCard(s, avgOf(s), incompleteP95 ? null : p95Max(s), 'Duration', incompleteP95 ? [null, null] : null)}</div>` : '')
     + listHeader({ icon: 'db', title: `${d.queries.length}${d.queries.length === 100 ? '+' : ''} queries`, tableId: id, viewToggle: false, placeholder: 'Search queries' })
-    + table(id, cols, d.queries, { go: x => 'queries/' + x.group_hash, serverQ: 1 })
-    + `<div style="height:36px"></div><div class="lh"><span class="li">${ic('alert', 20)}</span><h3>Possible N+1 queries</h3><span class="mut" style="font-size:13px">Same query 5+ times in one execution, last 24 hours at most</span></div>`
-    + table('np1', [{ k: 'sql', label: 'Query', w: 'minmax(300px,1fr)', r: x => `<div class="cell2"><b class="mono" style="font-size:13px" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</b><small>${esc(x.file ? x.file + (x.line ? ':' + x.line : '') : 'no source')}</small></div>` }, cNum('executions', 'Executions', '100px'), cNum('queries', 'Queries', '90px'), cNum('max_per_execution', 'Max / exec', '100px'), { k: 'total_ms', label: 'Total', w: '96px', num: 1, r: x => fmtD(x.total_ms) }], np,
+    + table(id, cols, d.queries, { go: queryPath, serverQ: 1 })
+    + (d.n_plus_one ? possibleRepeatedQueries(d.n_plus_one.suspects) : '');
+}
+function possibleRepeatedQueries(suspects) {
+  return `<div style="height:36px"></div><div class="lh"><span class="li">${ic('alert', 20)}</span><h3>Possible N+1 queries</h3><span class="mut" style="font-size:13px">Same query 5+ times in one execution, last 24 hours at most</span></div>`
+    + table('np1', [{ k: 'sql', label: 'Query', w: 'minmax(300px,1fr)', r: x => `<div class="cell2"><b class="mono" style="font-size:13px" title="${esc(x.sql)}">${sqlHi(x.sql || '')}</b><small>${esc(x.file ? x.file + (x.line ? ':' + x.line : '') : 'no source')}</small></div>` }, cNum('executions', 'Executions', '100px'), cNum('queries', 'Queries', '90px'), cNum('max_per_execution', 'Max / exec', '100px'), { k: 'total_ms', label: 'Total', w: '96px', num: 1, r: x => fmtD(x.total_ms) }], suspects,
       { sort: { k: 'queries', d: -1 }, go: x => x.sample_execution_id ? 'requests/' + x.sample_execution_id : null, emptyText: 'No repeated queries found.' });
 }
-async function vQuery(hash) {
-  const d = await api('/queries/' + hash, wp()); WIN = d.window; const g = d.group;
-  return crumbs([['Queries', 'queries'], [(g.sql || '').slice(0, 60) + ((g.sql || '').length > 60 ? '…' : '')]]) + pageHead('Query') + `<div class="panel" style="padding:16px"><pre class="box" style="border:0;background:none;padding:4px">${sqlHi(g.sql || '')}</pre><div style="display:flex;gap:10px;padding:8px 4px 0;flex-wrap:wrap"><span class="badge-s">${esc(g.connection || '—')}</span><span class="badge-s">max ${fmtD(g.max_ms)}</span><button class="btn sm" data-act="copyText" data-arg="${esc(g.sql || '')}">${ic('copy', 13)}Copy</button></div></div>`
+async function vQuery(hash, sourceId = null) {
+  const path = sourceId === null ? '/queries/' + hash : `/queries/otlp/${sourceId}/${hash}`;
+  const d = await api(path, scopedWp());
+  WIN = d.window;
+  const g = d.group;
+  const origin = sourceId === null
+    ? { k: 'source', label: 'Source', w: 'minmax(240px,1fr)', v: x => x.execution_preview || '', r: x => `<span class="ell" style="display:flex;gap:8px;align-items:center">${srcBadge(x.source)}<span class="mono ell" style="font-size:13px">${esc(x.execution_preview || '—')}</span></span>` }
+    : { k: 'execution_preview', label: 'Service', w: 'minmax(240px,1fr)', r: x => `<div class="cell2"><b>${esc(g.service_label || '—')}</b><small class="mono">${esc(x.execution_preview || '')}</small></div>` };
+  return crumbs([['Queries', 'queries'], [(g.sql || '').slice(0, 60) + ((g.sql || '').length > 60 ? '…' : '')]]) + pageHead('Query') + `<div class="panel" style="padding:16px"><pre class="box" style="border:0;background:none;padding:4px">${sqlHi(g.sql || '')}</pre><div style="display:flex;gap:10px;padding:8px 4px 0;flex-wrap:wrap"><span class="badge-s">${esc(g.service_label || g.connection || '—')}</span><span class="badge-s">max ${fmtD(g.max_ms)}</span><button class="btn sm" data-act="copyText" data-arg="${esc(g.sql || '')}">${ic('copy', 13)}Copy</button></div></div>`
     + `<div class="charts grid2">${simpleBars(d.series, 'calls', 'Calls')}${durCard(d.series, g.avg_ms, g.p95_ms)}</div>`
     + listHeader({ icon: 'db', title: `${fmtInt(g.calls)} calls`, tableId: 'qcalls', viewToggle: false })
-    + table('qcalls', [dateCell(), { k: 'source', label: 'Source', w: 'minmax(240px,1fr)', v: x => x.execution_preview || '', r: x => `<span class="ell" style="display:flex;gap:8px;align-items:center">${srcBadge(x.source)}<span class="mono ell" style="font-size:13px">${esc(x.execution_preview || '—')}</span></span>` }, cDur('duration_ms', 'Duration', '110px')],
-      d.instances, { sort: { k: 'created_at', d: -1 }, go: x => execLink(x.source, x.execution_id), text: x => x.execution_preview || '', emptyText: 'No executions in the raw window (about 14 days).' });
+    + table('qcalls', [dateCell(), origin, cDur('duration_ms', 'Duration', '110px')], d.instances, {
+      sort: { k: 'created_at', d: -1 },
+      go: sourceId === null ? x => execLink(x.source, x.execution_id) : null,
+      text: x => x.execution_preview || '',
+      emptyText: sourceId === null ? 'No executions in the raw window (about 14 days).' : 'No telemetry in this period.',
+    });
+}
+
+// ---------- worker progress ----------
+async function vWorkerProgress() {
+  const [catalog, d] = await Promise.all([sources(), api('/worker-progress', scopedWp())]);
+  WIN = d.window;
+  const header = pageHead('Worker progress') + scopeControls(catalog);
+  if (!d.available) {
+    return header + `<div class="empty">${S.service ? 'Worker progress is unavailable for this service.' : 'No successful runs in this period.'}</div>`;
+  }
+
+  const service = serviceColumn(catalog);
+  const operation = { k: 'operation', label: 'Operation', w: 'minmax(160px,1fr)' };
+  const progress = table('worker-progress', [service, operation, dateCell('last_success_at', '195px', 'Last successful run')], d.progress,
+    { minw: 500, sort: { k: 'last_success_at', d: -1 }, emptyText: 'No successful runs in this period.' });
+  const errors = d.errors.length ? `<section class="worker-errors"><div class="lh"><h3>Errors</h3></div>
+    ${table('worker-errors', [service, operation, cNum('count', 'Count'), dateCell('last_seen_at', '195px', 'Last seen')], d.errors,
+      { minw: 600, sort: { k: 'last_seen_at', d: -1 } })}</section>` : '';
+
+  return header + progress + errors;
 }
 
 // ---------- notifications & mail ----------
@@ -947,7 +1050,7 @@ async function vMcp() {
 }
 // ---------- router ----------
 // Paths under BASE; every view is async and returns HTML. Window params ride along in the query string so a link
-// (Share) opens the same period and environment.
+// (Share) opens the same period, environment, project and service on supported views.
 const H = '([0-9a-f]{32})', U = '([0-9a-f-]{36})';
 const ROUTER = [
   [/^$/, () => vDashboard(), 'dashboard'], [/^issues$/, () => vIssues(), 'issues'], [/^issues\/(\d+)$/, m => vIssue(m[1]), 'issues'],
@@ -957,16 +1060,34 @@ const ROUTER = [
   [/^scheduled-tasks$/, () => vScheduled(), 'scheduled-tasks'], [/^scheduled-tasks\/runs\/([0-9]+|[0-9a-f-]{36})$/, m => vRun(m[1], 'task'), 'scheduled-tasks'], [new RegExp('^scheduled-tasks/' + H + '$'), m => vTask(m[1]), 'scheduled-tasks'],
   [/^exceptions$/, () => vExceptions(), 'exceptions'], [new RegExp('^exceptions/' + H + '$'), m => vException(m[1]), 'exceptions'],
   [/^queries$/, () => vQueries(), 'queries'], [new RegExp('^queries/' + H + '$'), m => vQuery(m[1]), 'queries'],
+  ...(BOOT.sources_enabled ? [
+    [/^queries\/otlp\/(\d+)\/([0-9a-f]{32,64})$/, m => vQuery(m[2], m[1]), 'queries'],
+    [/^worker-progress$/, () => vWorkerProgress(), 'worker-progress'],
+  ] : []),
   [/^notifications$/, () => vNotifications(), 'notifications'], [new RegExp('^notifications/' + H + '$'), m => vNotification(m[1]), 'notifications'],
   [/^mail$/, () => vMail(), 'mail'], [new RegExp('^mail/' + H + '$'), m => vMailable(m[1]), 'mail'],
   [/^cache$/, () => vCache(), 'cache'], [/^outgoing$/, () => vOutgoing(), 'outgoing'], [new RegExp('^outgoing/' + H + '$'), m => vDomain(m[1]), 'outgoing'],
   [/^users$/, () => vUsers(), 'users'], [/^users\/([^/]+)$/, m => vUser(decodeURIComponent(m[1])), 'users'], [/^logs$/, () => vLogs(), 'logs'],
   [/^settings$/, () => vSettings(), 'settings'], [/^mcp$/, () => vMcp(), 'mcp'],
 ];
-const TITLES = { dashboard: 'Dashboard', issues: 'Issues', requests: 'Requests', jobs: 'Jobs', commands: 'Commands', 'scheduled-tasks': 'Scheduled Tasks', exceptions: 'Exceptions', queries: 'Queries', notifications: 'Notifications', mail: 'Mail', cache: 'Cache', outgoing: 'Outgoing Requests', users: 'Users', logs: 'Logs', settings: 'Settings', mcp: 'MCP' };
+const TITLES = { dashboard: 'Dashboard', issues: 'Issues', requests: 'Requests', jobs: 'Jobs', commands: 'Commands', 'scheduled-tasks': 'Scheduled Tasks', exceptions: 'Exceptions', queries: 'Queries', 'worker-progress': 'Worker progress', notifications: 'Notifications', mail: 'Mail', cache: 'Cache', outgoing: 'Outgoing Requests', users: 'Users', logs: 'Logs', settings: 'Settings', mcp: 'MCP' };
 const curRel = () => { const p = decodeURIComponent(location.pathname); return (p.startsWith(BASE) ? p.slice(BASE.length) : p).replace(/^\/+|\/+$/g, ''); };
-function query() { const q = new URLSearchParams(); if (S.period === 'custom') { q.set('from', S.from); q.set('to', S.to); } else if (S.period !== '24h') q.set('period', S.period); if (S.env) q.set('env', S.env); const s = q.toString(); return s ? '?' + s : ''; }
-const urlFor = rel => BASE + (rel ? '/' + rel : '') + query();
+function query(rel) {
+  const scoped = BOOT.sources_enabled && (rel === 'worker-progress' || /^queries(?:\/|$)/.test(rel));
+  const q = new URLSearchParams();
+  if (S.period === 'custom') {
+    q.set('from', S.from);
+    q.set('to', S.to);
+  } else if (scoped || S.period !== '24h') {
+    q.set('period', S.period);
+  }
+  if (scoped || S.env) q.set('env', S.env || '');
+  if (scoped && S.project) q.set('project', S.project);
+  if (scoped && S.service) q.set('service', S.service);
+  const params = q.toString();
+  return params ? '?' + params : '';
+}
+const urlFor = rel => BASE + (rel ? '/' + rel : '') + query(rel);
 let PENDING = null; // VS seeded for the next page (e.g. a search from a trace span)
 function go(rel, seed = null) { closeDrawer(); closePop(); PENDING = seed; history.pushState(null, '', urlFor(rel)); render(); }
 let curPath = null, seq = 0;
@@ -980,12 +1101,22 @@ async function render(keepScroll) {
   try { html = route ? await route[1](m) : errorHtml({ status: 404, message: 'This page does not exist.' }); }
   catch (e) { if (!(e instanceof ApiError)) console.error(e); html = errorHtml(e); }
   if (my !== seq) return; bar.classList.remove('on');
-  const focus = document.activeElement && document.activeElement.matches('input[data-search],input[data-isearch],input[data-logsearch]') ? { sel: document.activeElement.dataset.search ? `[data-search="${document.activeElement.dataset.search}"]` : document.activeElement.dataset.isearch ? '[data-isearch]' : '#logq', pos: document.activeElement.selectionStart } : null;
+  const active = document.activeElement;
+  const filter = active?.dataset.scopeField;
+  const input = active?.matches('input[data-search],input[data-isearch],input[data-logsearch]');
+  const focus = filter ? '[data-scope-field="' + filter + '"]'
+    : input ? (active.dataset.search ? '[data-search="' + active.dataset.search + '"]' : active.dataset.isearch ? '[data-isearch]' : '#logq') : null;
+  const selection = input ? active.selectionStart : null;
   for (const k in CH) if (!html.includes(`data-chart="${k}"`)) delete CH[k];
   $('#page').innerHTML = html;
   if (TL) renderTL();
   main.scrollTop = keepScroll ? st : 0;
-  if (focus) { const n = $(focus.sel); if (n) { n.focus(); try { n.setSelectionRange(focus.pos, focus.pos); } catch (e) { /* number inputs */ } } }
+  if (focus && $(focus)) {
+    const next = $(focus);
+    next.focus({ preventScroll: true });
+    if (selection !== null) next.setSelectionRange(selection, selection);
+  }
+  $('#current-environment').textContent = S.env || 'All environments';
   document.body.classList.remove('nav-open');
   if (OPEN_ISSUES == null) refreshBadge();
 }
@@ -1013,8 +1144,18 @@ const A = {
   },
   toggleActivity() { S.activityOpen = !S.activityOpen; render(true); },
   async env(_, el) {
-    if (!ENVS) { try { ENVS = (await api('/overview', { period: '1h' })).environments; } catch (e) { ENVS = []; } }
-    openPop(el, menu([{ label: 'Environment' }, { t: 'All environments', v: '' }, ...ENVS.map(e => ({ t: e, v: e }))], S.env || ''), v => { S.env = v || null; store.set('env', S.env); windowChanged(); });
+    const [legacy, catalog] = await Promise.all([
+      ENVS ? Promise.resolve(ENVS) : api('/overview', { period: '1h' }).then(d => d.environments || []).catch(() => []),
+      sources().catch(() => ({ services: [] })),
+    ]);
+    if (!el.isConnected) return;
+    const envs = [...new Set([...legacy, ...catalog.services.map(service => service.environment).filter(Boolean), ...(S.env ? [S.env] : [])])].sort();
+    openPop(el, menu([{ label: 'Environment' }, { t: 'All environments', v: '' }, ...envs.map(e => ({ t: e, v: e }))], S.env || ''), v => {
+      if (S.env !== (v || null)) VS.conn = null;
+      S.env = v || null;
+      store.set('env', S.env);
+      windowChanged();
+    });
   },
   userMenu(_, el) {
     openPop(el, menu([{ label: 'Theme' }, { t: 'Dark', v: 'dark', icon: ic('moon', 15) }, { t: 'Light', v: 'light', icon: ic('sun', 15) }, { t: 'System', v: 'system', icon: ic('app', 15) }, ...(HOME || LOGOUT ? ['-'] : []), ...(HOME ? [{ t: HOME.label, v: 'home', icon: ic('ext', 15) }] : []), ...(LOGOUT ? [{ t: 'Sign out', v: 'out', icon: ic('out2', 15) }] : [])], S.theme), async v => {
@@ -1145,6 +1286,17 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const t = e.target;
+  const scope = t.dataset.scopeField;
+  if (scope === 'project' || scope === 'service') {
+    const value = t.value || null;
+    if (S[scope] === value) return;
+    S[scope] = value;
+    if (scope === 'project' && (!value || !S.service?.startsWith(value + '/'))) S.service = null;
+    VS.conn = null;
+    history.pushState(null, '', urlFor(curRel()));
+    render(true);
+    return;
+  }
   if (t.dataset.thtype) { fillTargets(t.value); $('#th-target').placeholder = THR_HINT[t.value] || ''; }
   if (t.dataset.chtype) { const v = t.value, tg = v === 'telegram'; VS.chType = v; $('#ch-secret-f').style.display = v === 'webhook' ? '' : 'none'; $('#ch-url-f').style.display = tg ? 'none' : ''; $('#ch-tg-f').style.display = tg ? '' : 'none'; $('#ch-help').textContent = CH_HELP[v] || CH_HELP.webhook; }
 });
@@ -1154,15 +1306,20 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('[data-popsearch]') && popCb) { const vis = $$('#poplist .pi').filter(p => !p.hidden); const cb = popCb; if (vis.length === 1) { closePop(); cb(vis[0].dataset.pick); } else if (!vis.length && /^[A-Za-z0-9_.@:-]+$/.test(e.target.value.trim())) { closePop(); cb(e.target.value.trim()); } }
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-act][tabindex],[data-sort][tabindex],[data-log][tabindex],[data-pick][tabindex]')) { e.preventDefault(); e.target.click(); }
 });
-window.addEventListener('popstate', () => render());
+window.addEventListener('popstate', () => {
+  const { project, service, env } = S;
+  readWindowUrl();
+  if (project !== S.project || service !== S.service || env !== S.env) VS.conn = null;
+  if (env !== S.env) OPEN_ISSUES = null;
+  render();
+});
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (S.theme === 'system') applyTheme(); });
 
 // ---------- boot ----------
 (function boot() {
   const root = document.getElementById('lookout-app');
-  root.innerHTML = `<div class="app"><aside class="side" id="side"></aside><main class="main" id="main"><div id="busy" aria-hidden="true"></div><div class="topbar"><button class="burger" data-act="nav" aria-label="Menu">${ic('menu', 18)}</button><b>${esc(BOOT.app_name || 'Lookout')}</b><span class="mut ell">${esc(S.env || 'All environments')}</span></div><div class="page" id="page"></div></main></div><div id="ov" data-act="closeDrawer"></div><aside id="drawer" aria-hidden="true" aria-label="Details"><div class="dr-h"><button class="x" data-act="closeDrawer" aria-label="Close">${ic('x', 16)}</button><div id="dr-t" class="ell"></div></div><div class="dr-b" id="dr-b"></div></aside><div id="pop" role="listbox"></div><div id="tip" role="tooltip"></div><div id="toast" role="status" aria-live="polite"></div>`;
+  root.innerHTML = `<div class="app"><aside class="side" id="side"></aside><main class="main" id="main"><div id="busy" aria-hidden="true"></div><div class="topbar"><button class="burger" data-act="nav" aria-label="Menu">${ic('menu', 18)}</button><b>${esc(BOOT.app_name || 'Lookout')}</b><span class="mut ell" id="current-environment">${esc(S.env || 'All environments')}</span></div><div class="page" id="page"></div></main></div><div id="ov" data-act="closeDrawer"></div><aside id="drawer" aria-hidden="true" aria-label="Details"><div class="dr-h"><button class="x" data-act="closeDrawer" aria-label="Close">${ic('x', 16)}</button><div id="dr-t" class="ell"></div></div><div class="dr-b" id="dr-b"></div></aside><div id="pop" role="listbox"></div><div id="tip" role="tooltip"></div><div id="toast" role="status" aria-live="polite"></div>`;
   applyTheme();
-  if (location.search && S.period === 'custom' && !(Date.parse(S.to) > Date.parse(S.from))) { S.period = '24h'; S.from = S.to = null; }
   history.replaceState(null, '', urlFor(curRel()));
   render();
 })();

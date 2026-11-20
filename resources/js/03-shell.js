@@ -3,8 +3,28 @@ function periodSeg() {
   return `<div class="seg" role="group" aria-label="Period">${PERIODS.map(p => `<button class="${S.period === p ? 'on' : ''}" data-act="period" data-arg="${p}" aria-pressed="${S.period === p}">${p.toUpperCase()}</button>`).join('')}<button class="cal ${S.period === 'custom' ? 'on' : ''}" data-act="calendar" aria-label="Custom range" title="${S.period === 'custom' ? esc(periodTxt()) : 'Custom range'}">${ic('calendar', 15)}${ic('cd', 12)}</button></div>`;
 }
 function pageHead(title, right = '') { return `<div class="ph"><h1>${title}</h1><div class="grow"></div>${right}${periodSeg()}</div>`; }
+const sources = () => BOOT.sources_enabled ? api('/sources') : Promise.resolve({ projects: [], services: [] });
+function scopeControls({ projects, services }) {
+  if (!BOOT.sources_enabled) return '';
+
+  const option = (value, label, selected) => `<option value="${esc(value)}"${selected === value ? ' selected' : ''}>${esc(label)}</option>`;
+  const select = (field, label, all, options) => `<div class="scope-filter"><label for="scope-${field}">${label}</label><select id="scope-${field}" class="inp" data-scope-field="${field}">${option('', all, S[field] || '')}${options}</select></div>`;
+  const list = services.filter(service => !S.project || service.project === S.project);
+  const projectOptions = projects.map(project => option(project.slug, project.label, S.project)).join('');
+  const optionsFor = items => items.map(service => option(service.key, service.label, S.service)).join('');
+  const serviceOptions = S.project || projects.length <= 1 ? optionsFor(list) : projects.map(project => {
+    const items = list.filter(service => service.project === project.slug);
+    return items.length ? `<optgroup label="${esc(project.label)}">${optionsFor(items)}</optgroup>` : '';
+  }).join('');
+  const missingProject = S.project && !projects.some(project => project.slug === S.project)
+    ? option(S.project, S.project, S.project) : '';
+  const missingService = S.service && !list.some(service => service.key === S.service)
+    ? option(S.service, S.service, S.service) : '';
+
+  return `<div class="scope-filters">${select('project', 'Project', 'All projects', projectOptions + missingProject)}${select('service', 'Service', 'All services', serviceOptions + missingService)}</div>`;
+}
 function crumbs(items) { return `<div class="crumbs">${items.map((c, i) => (i ? ic('cr', 13) : '') + (c[1] != null ? `<a data-go="${esc(c[1])}">${esc(c[0])}</a>` : `<span class="ell" style="max-width:min(60vw,520px)">${esc(c[0])}</span>`)).join('')}</div>`; }
-const ACT = [['requests', 'Requests', 'globe'], ['jobs', 'Jobs', 'jobs'], ['commands', 'Commands', 'braces'], ['scheduled-tasks', 'Scheduled Tasks', 'calendar'], ['exceptions', 'Exceptions', 'alert'], ['queries', 'Queries', 'db'], ['notifications', 'Notifications', 'bell'], ['mail', 'Mail', 'mail'], ['cache', 'Cache', 'cache'], ['outgoing', 'Outgoing Requests', 'out']];
+const ACT = [['requests', 'Requests', 'globe'], ['jobs', 'Jobs', 'jobs'], ['commands', 'Commands', 'braces'], ['scheduled-tasks', 'Scheduled Tasks', 'calendar'], ['exceptions', 'Exceptions', 'alert'], ['queries', 'Queries', 'db'], ...(BOOT.sources_enabled ? [['worker-progress', 'Worker progress', 'clock']] : []), ['notifications', 'Notifications', 'bell'], ['mail', 'Mail', 'mail'], ['cache', 'Cache', 'cache'], ['outgoing', 'Outgoing Requests', 'out']];
 let OPEN_ISSUES = null; let ENVS = null;
 function sidebar(section) {
   const nv = (id, label, icon, extra = '') => `<a class="nv ${section === id ? 'on' : ''}" href="${BASE}/${id === 'dashboard' ? '' : id}" data-go="${id === 'dashboard' ? '' : id}">${ic(icon, 16)}<span>${label}</span>${extra}</a>`;
@@ -14,7 +34,7 @@ function sidebar(section) {
     ${nv('dashboard', 'Dashboard', 'grid')}
     ${nv('issues', 'Issues', 'inbox', OPEN_ISSUES != null ? `<span class="badge">${fmtN(OPEN_ISSUES)}</span>` : '')}
     <div class="nv ${S.activityOpen ? 'open' : ''}" data-act="toggleActivity" role="button" tabindex="0" aria-expanded="${S.activityOpen}">${ic('activity', 16)}<span>Activity</span><span class="chev">${ic('cr', 15)}</span></div>
-    ${S.activityOpen ? `<div class="sub">${ACT.map(a => `<a class="nv ${section === a[0] ? 'on' : ''}" href="${BASE}/${a[0]}" data-go="${a[0]}">${a[1]}</a>`).join('')}</div>` : ''}
+    ${S.activityOpen ? `<div class="sub">${ACT.map(a => `<a class="nv ${section === a[0] ? 'on' : ''}" href="${esc(urlFor(a[0]))}" data-go="${a[0]}">${a[1]}</a>`).join('')}</div>` : ''}
     <div class="navlabel">Monitoring</div>
     ${nv('users', 'Users', 'user')}
     ${nv('logs', 'Logs', 'logs')}

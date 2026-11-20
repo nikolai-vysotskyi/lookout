@@ -11,13 +11,17 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Mcp\Facades\Mcp;
 use Lookout\Console\AutoResolveCommand;
+use Lookout\Console\PruneSourcesCommand;
+use Lookout\Console\SourceCommand;
 use Lookout\Console\TelegramNotifyCommand;
 use Lookout\Contracts\SettingStore;
 use Lookout\Http\Controllers\AssetController;
+use Lookout\Http\Controllers\OtlpController;
 use Lookout\Http\Controllers\PageController;
 use Lookout\Http\Middleware\AuthenticateMcpToken;
 use Lookout\Http\Middleware\EnsureLookoutAccess;
 use Lookout\Mcp\LookoutServer;
+use Lookout\Services\Sources;
 use Lookout\Support\NightowlSettingStore;
 
 /**
@@ -54,11 +58,15 @@ class LookoutServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'lookout');
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
-        $this->defineConnection();
+        $this->defineConnection(Lookout::connection());
+        if (Sources::enabled()) {
+            $this->defineConnection(Sources::connectionName());
+            $this->loadMigrationsFrom(__DIR__.'/../database/sources');
+        }
         $this->rateLimiter();
 
         if ($this->app->runningInConsole()) {
-            $this->commands([AutoResolveCommand::class, TelegramNotifyCommand::class]);
+            $this->commands([AutoResolveCommand::class, TelegramNotifyCommand::class, SourceCommand::class, PruneSourcesCommand::class]);
             $this->publishes([__DIR__.'/../config/lookout.php' => config_path('lookout.php')], 'lookout-config');
             $this->publishes([__DIR__.'/../database/migrations' => database_path('migrations')], 'lookout-migrations');
             $this->publishes([__DIR__.'/../dist' => public_path('vendor/lookout')], 'lookout-assets');
@@ -70,6 +78,9 @@ class LookoutServiceProvider extends ServiceProvider
                     ->dailyAt((string) config('lookout.auto_resolve.at', '03:40'))
                     ->when(fn (): bool => Lookout::enabled())
                     ->withoutOverlapping(30);
+            }
+            if (Sources::enabled()) {
+                $schedule->command('lookout:prune-sources')->daily()->onOneServer()->withoutOverlapping();
             }
             if (config('lookout.telegram.enabled', true)) {
                 $schedule->command('lookout:telegram-notify')
@@ -99,6 +110,13 @@ class LookoutServiceProvider extends ServiceProvider
         }
 
         $path = Lookout::path();
+        if (Sources::enabled()) {
+            $ingest = Route::middleware(ThrottleRequests::using('lookout-ingest'));
+            if ($ingestDomain = config('lookout.sources.ingest_domain') ?: $domain) {
+                $ingest->domain($ingestDomain);
+            }
+            $ingest->group(fn () => Route::post($path.'/v1/traces', OtlpController::class)->name('lookout.ingest.traces'));
+        }
         $group->group(function () use ($path): void {
             Route::prefix($path.'/api')->group(__DIR__.'/../routes/api.php');
             Route::get($path.'/assets/{file}', AssetController::class)->where('file', 'app\.(js|css)|fonts/[a-z-]+\.woff2')->name('lookout.assets');
@@ -160,6 +178,9 @@ class LookoutServiceProvider extends ServiceProvider
      */
     protected function rateLimiter(): void
     {
+        RateLimiter::for('lookout-ingest', fn (Request $request) => Limit::perMinute(max(1, (int) config('lookout.sources.per_minute', 600)))->by('lookout-ingest:'.$request->ip())
+        );
+
         $name = (string) config('lookout.mcp.rate_limiter', 'lookout-mcp');
 
         RateLimiter::for($name, function (Request $request) use ($name) {

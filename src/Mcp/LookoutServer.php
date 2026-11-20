@@ -11,6 +11,7 @@ use Lookout\Mcp\Tools\FailedJobsTool;
 use Lookout\Mcp\Tools\GetIssueTool;
 use Lookout\Mcp\Tools\GetSettingsTool;
 use Lookout\Mcp\Tools\ListIssuesTool;
+use Lookout\Mcp\Tools\ListSourcesTool;
 use Lookout\Mcp\Tools\ResolveIssueTool;
 use Lookout\Mcp\Tools\SetAutoResolveTool;
 use Lookout\Mcp\Tools\SetThresholdTool;
@@ -18,6 +19,8 @@ use Lookout\Mcp\Tools\SlowQueriesTool;
 use Lookout\Mcp\Tools\SlowRoutesTool;
 use Lookout\Mcp\Tools\UpdateAlertChannelTool;
 use Lookout\Mcp\Tools\UpdateIssueTool;
+use Lookout\Mcp\Tools\WorkerProgressTool;
+use Lookout\Services\Sources;
 
 /**
  * Admin-only MCP server over the self-hosted NightOwl monitoring data, mounted at lookout.mcp.path behind
@@ -66,6 +69,9 @@ class LookoutServer extends Server
         $app = (string) (config('lookout.mcp.app_name') ?: config('app.name'));
         $this->name = (string) (config('lookout.mcp.server_name') ?: trim($app.' Lookout (admin)'));
         $this->instructions = str_replace(':app', $app, self::INSTRUCTIONS);
+        if (Sources::enabled()) {
+            $this->tools = [...$this->tools, ListSourcesTool::class, WorkerProgressTool::class];
+        }
         $this->addMethod('tools/call', CallTool::class);
     }
 

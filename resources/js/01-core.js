@@ -17,23 +17,38 @@ function hsh(s) { let h = 2166136261; for (const c of String(s)) { h ^= c.charCo
 
 const PERIODS = ['1h', '24h', '7d', '14d', '30d'];
 const PERIOD_TXT = { '1h': 'in the last hour', '24h': 'in the last 24 hours', '7d': 'in the last 7 days', '14d': 'in the last 14 days', '30d': 'in the last 30 days' };
-const S = { period: '24h', from: null, to: null, env: null, theme: 'dark', activityOpen: true };
+const S = { period: '24h', from: null, to: null, env: null, project: null, service: null, theme: 'dark', activityOpen: true };
 const store = {
   get(k) { try { return localStorage.getItem(PREFIX + k); } catch (e) { return null; } },
   set(k, v) { try { v == null ? localStorage.removeItem(PREFIX + k) : localStorage.setItem(PREFIX + k, v); } catch (e) { /* private mode */ } },
 };
-(() => {
-  const t = store.get('theme'); if (t) S.theme = t;
-  const p = store.get('period'); if (PERIODS.includes(p)) S.period = p;
-  const e = store.get('env'); if (e) S.env = e;
+function readWindowUrl(usePreferences = false) {
   const q = new URLSearchParams(location.search);
-  if (PERIODS.includes(q.get('period'))) S.period = q.get('period');
-  if (q.get('from') && q.get('to')) { S.from = q.get('from'); S.to = q.get('to'); S.period = 'custom'; }
-  if (q.has('env')) S.env = q.get('env') || null;
-})();
+  const period = q.get('period') || (usePreferences ? store.get('period') : null);
+  S.period = PERIODS.includes(period) ? period : '24h';
+  S.from = S.to = null;
+  if (Date.parse(q.get('to')) > Date.parse(q.get('from'))) {
+    S.from = q.get('from');
+    S.to = q.get('to');
+    S.period = 'custom';
+  }
+  S.env = q.has('env') ? q.get('env') || null : (usePreferences ? store.get('env') : null);
+  if (BOOT.sources_enabled) {
+    const project = q.get('project');
+    const service = q.get('service');
+    const slug = '[a-z0-9][a-z0-9_-]{0,63}';
+    S.project = project && new RegExp('^' + slug + '$').test(project) ? project : null;
+    S.service = service && new RegExp('^' + slug + '/' + slug + '$').test(service)
+      && (!S.project || service.startsWith(S.project + '/')) ? service : null;
+  }
+}
+S.theme = store.get('theme') || S.theme;
+readWindowUrl(true);
 const periodTxt = () => S.period === 'custom' ? `between ${S.from.slice(0, 10)} and ${S.to.slice(0, 10)}` : PERIOD_TXT[S.period];
 // Window params shared by every endpoint.
 const wp = () => ({ ...(S.period === 'custom' ? { from: S.from, to: S.to } : { period: S.period }), environment: S.env || '' });
+const scopeParams = () => BOOT.sources_enabled ? { project: S.project, service: S.service } : {};
+const scopedWp = () => ({ ...wp(), ...scopeParams() });
 
 function cookie(name) { const m = document.cookie.match('(?:^|; )' + name.replace(/[.$?*|{}()[\]\\/+^]/g, '\\$&') + '=([^;]*)'); return m ? decodeURIComponent(m[1]) : null; }
 class ApiError extends Error { constructor(status, message, errors) { super(message); this.status = status; this.errors = errors || null; } }

@@ -8,6 +8,7 @@ use Illuminate\View\View;
 use Inertia\Inertia;
 use Lookout\Lookout;
 use Lookout\LookoutServiceProvider;
+use Lookout\Services\Sources;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -30,6 +31,7 @@ class PageController extends Controller
             'boot' => [
                 'base_path' => $base,
                 'api_base' => $base.'/api',
+                'sources_enabled' => Sources::enabled(),
                 ...self::navigation(),
                 'title' => (string) (config('lookout.title') ?: 'Lookout'),
                 'app_name' => config('lookout.brand') ?? config('app.name'),

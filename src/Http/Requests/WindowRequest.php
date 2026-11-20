@@ -6,6 +6,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\ValidationException;
 use Lookout\Services\Issues;
+use Lookout\Services\Sources;
 use Lookout\Services\Window;
 
 /**
@@ -28,6 +29,8 @@ class WindowRequest extends FormRequest
             'from' => ['nullable', 'required_with:to', 'date', 'prohibits:period'],
             'to' => ['nullable', 'required_with:from', 'date', 'after:from'],
             'environment' => ['nullable', 'string', 'max:64'],
+            'project' => ['nullable', 'string', 'regex:~\A'.Sources::SLUG.'\z~'],
+            'service' => ['nullable', 'string', 'regex:~\A'.Sources::SLUG.'/'.Sources::SLUG.'\z~'],
             'sort' => ['nullable', 'string', 'max:32'],
             'direction' => ['nullable', 'in:asc,desc'],
             'limit' => ['nullable', 'integer', 'min:1', 'max:100'],

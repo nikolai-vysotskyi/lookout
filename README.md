@@ -21,6 +21,7 @@ Lookout is an open-source, self-hosted alternative to Laravel Nightwatch. It is 
 - [How it compares](#how-it-compares)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Projects and connectors](#projects-and-connectors)
 - [Configuration](#configuration)
 - [Telegram alerts](#telegram-alerts)
 - [MCP server](#mcp-server)
@@ -226,6 +227,12 @@ php artisan vendor:publish --tag=lookout-assets
 
 The published copy in `public/vendor/lookout` wins while it exists. Re-publish after each update.
 
+## Projects and connectors
+
+Use one Lookout instance and one PostgreSQL monitoring database for multiple projects and services. Keep your existing Laravel telemetry through NightOwl and connect Python workers or other services over OpenTelemetry. Filter **Queries** and **Worker progress** by project and service in Lookout, or use the same service keys in MCP.
+
+See [Projects and telemetry connectors](docs/connectors.md) to enable the feature, register a service and write an integration using a standard OTLP SDK.
+
 ## Configuration
 
 All keys live in `config/lookout.php`.
@@ -293,7 +300,9 @@ With `laravel/mcp` installed, Lookout serves an MCP server at `/mcp/lookout`. Ev
 | `list_issues` | Issues by status, type and environment, the most recently seen first. |
 | `get_issue` | One issue with its counts and the stack trace of its latest occurrence. |
 | `slow_routes` | Routes by p95, average, calls or error rate over a window. |
-| `slow_queries` | Queries by p95, total time, average or calls. |
+| `slow_queries` | Queries by p95, total time, average or calls. Accepts project, service and environment when projects are enabled. |
+| `list_sources` | Projects and service keys with their connector and environment, when projects are enabled. |
+| `worker_progress` | Successful worker cycles and grouped errors, when projects are enabled. |
 | `failed_jobs` | Jobs with failures over a window. |
 | `get_settings` | Thresholds, alert channels and auto-resolve, as the Settings page shows them: URLs cut to the host, secrets and bot tokens never returned. |
 

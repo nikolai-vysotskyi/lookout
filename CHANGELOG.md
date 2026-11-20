@@ -4,6 +4,15 @@ All notable changes to Lookout are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-20
+
+### Added
+
+- Optional projects and services in the existing monitoring database. The existing NightOwl service keeps its history.
+- OTLP/HTTP trace ingestion with a separate credential for each service. The receiver supports protobuf, JSON and gzip.
+- Project and service filters for Queries and Worker progress. MCP adds `list_sources` and `worker_progress` and applies the same filters to `slow_queries`.
+- [Connector guide](docs/connectors.md) with setup, credential rotation and an OpenTelemetry example.
+
 ## [0.3.0] - 2026-11-19
 
 ### Breaking

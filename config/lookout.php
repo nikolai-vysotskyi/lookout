@@ -45,6 +45,22 @@ return [
     'connection' => env('LOOKOUT_DB_CONNECTION', 'nightowl_read'),
 
     /*
+    | Projects and OpenTelemetry sources. The writer points to the same monitoring database as 'connection' and
+    | falls back to NightOwl's PostgreSQL credentials. Enable before running the package migrations.
+    */
+    'sources' => [
+        'enabled' => (bool) env('LOOKOUT_SOURCES_ENABLED', false),
+        'connection' => env('LOOKOUT_INGEST_DB_CONNECTION', 'lookout_ingest'),
+        'ingest_domain' => env('LOOKOUT_INGEST_DOMAIN'),
+        'per_minute' => (int) env('LOOKOUT_INGEST_PER_MINUTE', 600),
+        'retention_days' => (int) env('LOOKOUT_INGEST_RETENTION_DAYS', 14),
+        'nightowl_project' => env('LOOKOUT_NIGHTOWL_PROJECT', 'default'),
+        'nightowl_project_label' => env('LOOKOUT_NIGHTOWL_PROJECT_LABEL'),
+        'nightowl_service' => env('LOOKOUT_NIGHTOWL_SERVICE', 'laravel'),
+        'nightowl_service_label' => env('LOOKOUT_NIGHTOWL_SERVICE_LABEL', 'Laravel'),
+    ],
+
+    /*
     | The user model behind assignees, comments and MCP tokens; null = auth.providers.users.model.
     */
     'user_model' => null,

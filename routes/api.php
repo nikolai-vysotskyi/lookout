@@ -30,7 +30,11 @@ Route::get('exceptions/{fingerprint}', [ApiController::class, 'exception'])->whe
 Route::get('mail/{groupHash}', [ApiController::class, 'mailable'])->where('groupHash', '[0-9a-f]{32}');
 Route::get('notifications/{groupHash}', [ApiController::class, 'notification'])->where('groupHash', '[0-9a-f]{32}');
 Route::get('outgoing/{groupHash}', [ApiController::class, 'outgoingHost'])->where('groupHash', '[0-9a-f]{32}');
+Route::get('sources', [ApiController::class, 'sources']);
+Route::get('worker-progress', [ApiController::class, 'workerProgress']);
 Route::get('queries', [ApiController::class, 'queries']);
+Route::get('queries/otlp/{sourceId}/{fingerprint}', [ApiController::class, 'sourceQuery'])
+    ->whereNumber('sourceId')->where('fingerprint', '[0-9a-f]{32,64}');
 Route::get('queries/{groupHash}', [ApiController::class, 'query'])->where('groupHash', '[0-9a-f]{32}');
 Route::get('outgoing', [ApiController::class, 'outgoing']);
 Route::get('commands', [ApiController::class, 'commands']);
