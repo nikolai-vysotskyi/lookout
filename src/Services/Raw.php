@@ -88,7 +88,10 @@ class Raw
         $this->dict($query, 'r', 'method_id', 'method');
         $this->scopeEnvironment($query, $environment, 'r.environment_id');
 
-        return $query->get()->map(fn (object $r): array => [
+        $rows = $query->get();
+        $names = $this->userNamesOf($rows);
+
+        return $rows->map(fn (object $r): array => [
             'id' => (int) $r->id,
             'trace_id' => $r->trace_id,
             'created_at' => self::iso($r->created_at),
@@ -97,6 +100,7 @@ class Raw
             'status_code' => $r->status_code !== null ? (int) $r->status_code : null,
             'duration_ms' => Rollups::ms($r->duration),
             'user_id' => $r->user_id ?: null,
+            'user_name' => $names[(string) $r->user_id] ?? null,
             'queries' => (int) $r->queries,
             'exceptions' => (int) $r->exceptions,
         ])->all();
@@ -137,6 +141,8 @@ class Raw
             $offset += $us ?? 0;
         }
 
+        $names = $this->userNamesOf([$r]);
+
         return [
             'request' => [
                 'id' => (int) $r->id,
@@ -148,6 +154,7 @@ class Raw
                 'status_code' => $r->status_code !== null ? (int) $r->status_code : null,
                 'duration_ms' => Rollups::ms($r->duration),
                 'user_id' => $r->user_id ?: null,
+                'user_name' => $names[(string) $r->user_id] ?? null,
                 'ip' => $r->ip,
                 'environment' => $r->environment,
                 'server' => $r->server,
@@ -288,9 +295,11 @@ class Raw
         }
 
         $rows = $query->get();
+        $entries = $rows->take($limit);
+        $names = $this->userNamesOf($entries);
 
         return [
-            'logs' => $rows->take($limit)->map(fn (object $r): array => [
+            'logs' => $entries->map(fn (object $r): array => [
                 'id' => (int) $r->id,
                 'created_at' => self::iso($r->created_at),
                 'level' => $r->level,
@@ -299,6 +308,7 @@ class Raw
                 'context' => self::context($r->context, $r->context_z),
                 'extra' => self::inflate($r->extra_z),
                 'user_id' => $r->user_id ?: null,
+                'user_name' => $names[(string) $r->user_id] ?? null,
                 'source' => $r->source,
                 'execution_id' => $r->execution_id,
                 'trace_id' => $r->trace_id,
@@ -421,6 +431,25 @@ class Raw
         }
 
         return $names;
+    }
+
+    /**
+     * The names of the rows' user ids, keyed by id, for the lists that show a user next to each row. One query per
+     * response; a row whose id has no user record is left out and the SPA falls back to "User #<id>".
+     *
+     * @param  iterable<object>  $rows
+     * @return array<string, ?string>
+     */
+    private function userNamesOf(iterable $rows): array
+    {
+        $ids = [];
+        foreach ($rows as $row) {
+            if (($row->user_id ?? null) !== null && $row->user_id !== '') {
+                $ids[] = (string) $row->user_id;
+            }
+        }
+
+        return array_map(fn (array $user): ?string => $user['name'], $this->userNames($ids));
     }
 
     /**

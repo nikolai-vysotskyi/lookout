@@ -4,6 +4,10 @@ All notable changes to Lookout are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+
+- Raw lists and detail pages show the user's name instead of `User #<id>`. The route's latest requests, an issue's or exception's occurrences, a request's and a job attempt's User row and the log drawer now carry `user_name`, resolved with one lookup per response from `nightowl_users` and the app's user model. An id with no user record stays `User #<id>`, as before.
+
 ## [0.4.1] - 2026-11-20
 
 ### Fixed

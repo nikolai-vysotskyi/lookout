@@ -239,7 +239,10 @@ class Issues
             ->select(['e.id', 'e.created_at', 'e.message', 'e.file', 'e.line', 'e.handled', 'e.user_id', 'e.trace_id', 'e.execution_id', 'e.execution_preview']);
         $query->leftJoin('nightowl_dict_string as src', 'src.id', '=', 'e.execution_source_id')->addSelect('src.value as source');
 
-        return $query->get()->map(fn (object $r): array => [
+        $rows = $query->get();
+        $names = $this->raw->userNames($rows->pluck('user_id')->filter()->map(fn ($id): string => (string) $id)->all());
+
+        return $rows->map(fn (object $r): array => [
             'id' => (int) $r->id,
             'created_at' => Raw::iso($r->created_at),
             'message' => $r->message,
@@ -247,6 +250,7 @@ class Issues
             'line' => $r->line !== null ? (int) $r->line : null,
             'handled' => (bool) $r->handled,
             'user_id' => $r->user_id ?: null,
+            'user_name' => $names[(string) $r->user_id]['name'] ?? null,
             'source' => $r->source,
             'execution_id' => $r->execution_id,
             'trace_id' => $r->trace_id,

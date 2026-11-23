@@ -153,4 +153,6 @@ function avatar(p, cls = '') {
   return `<span class="av ${cls}" style="background:${avColor(p.id ?? p.user_id ?? label)}" title="${esc(label)}">${esc((label[0] || '?').toUpperCase())}</span>`;
 }
 const userName = u => u ? (u.name || u.email || `User #${u.user_id ?? u.id}`) : 'Guest';
+// A user id with the name the API resolved for it, when it sent one (raw lists carry user_id and user_name apart).
+const userLabel = (id, name) => name || `User #${id}`;
 const iid = id => '#' + id;

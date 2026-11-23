@@ -60,11 +60,14 @@ class Details
             ->orderBy('e.attempt')->limit(100)->select(['e.attempt_id', 'e.attempt', 'e.created_at', 'e.duration'])
             ->tap(fn (Builder $q) => $this->raw->dict($q, 'e', 'status_id', 'status'))->get();
 
+        $names = $row->user_id !== null && $row->user_id !== '' ? $this->raw->userNames([(string) $row->user_id]) : [];
+
         return [
             'attempt' => [
                 'attempt_id' => $row->attempt_id, 'job_id' => $row->job_id, 'attempt' => $row->attempt !== null ? (int) $row->attempt : null,
                 'job' => $row->job_class, 'queue' => $row->queue, 'connection' => $row->connection, 'status' => $row->status,
                 'created_at' => Raw::iso($row->created_at), 'duration_ms' => Rollups::ms($row->duration), 'user_id' => $row->user_id ?: null,
+                'user_name' => $names[(string) $row->user_id]['name'] ?? null,
                 'environment' => $row->environment, 'server' => $row->server, 'peak_memory_bytes' => $row->peak_memory_usage !== null ? (int) $row->peak_memory_usage : null,
                 'exception_preview' => $row->exception_preview, 'group_hash' => Raw::hex($row->group_hash),
                 'parent' => ['source' => $row->source, 'execution_id' => $row->execution_id, 'preview' => $row->execution_preview, 'trace_id' => $row->trace_id],

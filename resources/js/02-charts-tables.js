@@ -108,5 +108,5 @@ const pathHtml = p => esc(p).replace(/\{(\w+\??)\}/g, '<em>{$1}</em>');
 const statusCell = (k = 'status_code', w = '80px') => ({ k, label: 'Status', w, r: x => `<span class="st ${x[k] >= 500 ? 's5' : x[k] >= 400 ? 's4' : ''}">${x[k] ?? '—'}</span>` });
 const methodOf = m => String(m || '').split('|')[0] || 'GET';
 function userCell(k = 'user_id', label = 'User', w = '190px') {
-  return { k, label, w, v: x => x[k] || '', r: x => x[k] ? `<a class="ucell" data-go="users/${encodeURIComponent(x[k])}">${avatar({ id: x[k], name: x.user_name || null }, 'sm')}<span class="ell">${esc(x.user_name || 'User #' + x[k])}</span></a>` : '<span class="dim">Guest</span>' };
+  return { k, label, w, v: x => x[k] || '', r: x => x[k] ? `<a class="ucell" data-go="users/${encodeURIComponent(x[k])}">${avatar({ id: x[k], name: x.user_name || null }, 'sm')}<span class="ell">${esc(userLabel(x[k], x.user_name))}</span></a>` : '<span class="dim">Guest</span>' };
 }
