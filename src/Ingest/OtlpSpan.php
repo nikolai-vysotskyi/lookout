@@ -13,6 +13,8 @@ final class OtlpSpan
         'SELECT', 'SET', 'SHOW', 'TRUNCATE', 'UPDATE', 'VACUUM', 'VALUES', 'WITH',
     ];
 
+    private const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+
     private const SQL_SYSTEMS = [
         'postgresql', 'mysql', 'mariadb', 'sqlite', 'microsoft.sql_server', 'mssql', 'oracle', 'db2',
         'cockroachdb', 'other_sql',
@@ -31,7 +33,10 @@ final class OtlpSpan
         }
 
         $attributes = $span['attributes'];
-        $error = $span['status'] === StatusCode::STATUS_CODE_ERROR;
+        $route = $span['kind'] === SpanKind::SPAN_KIND_SERVER ? self::route($attributes) : null;
+        $statusCode = $route !== null ? self::statusCode($attributes['http.response.status_code'] ?? null) : null;
+        // An HTTP server marks only 5xx as an error; a 4xx answer is the client's.
+        $error = $span['status'] === StatusCode::STATUS_CODE_ERROR || ($statusCode !== null && $statusCode >= 500);
         $operation = self::operationName($attributes['lookout.operation.name'] ?? null);
         $system = $attributes['db.system.name'] ?? $attributes['db.system'] ?? null;
         $query = $span['kind'] === SpanKind::SPAN_KIND_CLIENT && in_array($system, self::SQL_SYSTEMS, true);
@@ -41,6 +46,7 @@ final class OtlpSpan
 
         // Trace and exception names, messages, stack traces, connection details, and raw SQL are deliberately not retained.
         $name = match (true) {
+            $route !== null => $route,
             $query => self::sqlOperation($template)
                 ?? self::sqlOperation($attributes['db.operation.name'] ?? $attributes['db.operation'] ?? null)
                 ?? self::sqlOperation($span['name'])
@@ -57,6 +63,7 @@ final class OtlpSpan
             'started_at' => gmdate('Y-m-d H:i:s', intdiv($start, 1_000_000_000)).sprintf('.%06d', intdiv($start % 1_000_000_000, 1_000)),
             'duration_us' => intdiv($end, 1_000) - intdiv($start, 1_000),
             'kind' => match (true) {
+                $route !== null => 'request',
                 $query => 'query',
                 $error => 'error',
                 $progress => 'progress',
@@ -66,7 +73,30 @@ final class OtlpSpan
             'query_fingerprint' => $query ? hash('sha256', $system."\0".($template ?? $name)) : null,
             'query_text' => $template,
             'error' => $error,
+            'status_code' => $statusCode,
         ];
+    }
+
+    /**
+     * "GET /stocks/{symbol}" for a server span with a standard method and a route template (http.route): a path that
+     * starts with a slash, without a query string, made of path characters and template braces. Never the raw URL.
+     */
+    private static function route(array $attributes): ?string
+    {
+        $method = $attributes['http.request.method'] ?? null;
+        $route = $attributes['http.route'] ?? null;
+        if (! is_string($method) || ! in_array($method, self::HTTP_METHODS, true) || ! is_string($route)
+            || strlen($method) + 1 + strlen($route) > 128
+            || ! preg_match('#\A/[A-Za-z0-9._~\-/{}\[\]:*@]*\z#', $route)) {
+            return null;
+        }
+
+        return $method.' '.$route;
+    }
+
+    private static function statusCode(mixed $value): ?int
+    {
+        return is_int($value) && $value >= 100 && $value <= 599 ? $value : null;
     }
 
     private static function identifier(mixed $value, int $length): ?string

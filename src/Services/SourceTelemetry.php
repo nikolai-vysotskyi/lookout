@@ -50,6 +50,54 @@ final class SourceTelemetry
         })->all();
     }
 
+    /**
+     * HTTP routes of the OpenTelemetry services (server spans, kind "request"), in the shape of Performance::routes plus
+     * the service: calls, 4xx and 5xx counts, error rate (%), average and p95 duration.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function routeRows(Window $window, Collection $services, string $sort, int $limit): array
+    {
+        if ($services->isEmpty()) {
+            return [];
+        }
+
+        $rows = $this->spans($window, $services)->where('kind', 'request')
+            ->selectRaw('source_id, name, count(*) as calls, avg(duration_us) as average_us, '
+                .'percentile_disc(0.95) within group (order by duration_us) as p95_us, '
+                .'sum(case when status_code between 400 and 499 then 1 else 0 end) as client_errors, '
+                .'sum(case when error then 1 else 0 end) as server_errors')
+            ->groupBy('source_id', 'name')
+            ->orderByRaw(match ($sort) {
+                'calls' => 'calls desc',
+                'avg_ms' => 'average_us desc',
+                'error_rate' => '(sum(case when status_code between 400 and 499 or error then 1 else 0 end) * 1.0 / count(*)) desc',
+                default => 'p95_us desc',
+            })
+            ->orderBy('source_id')->orderBy('name')->limit($limit)->get();
+
+        $catalog = $services->keyBy('id');
+
+        return $rows->map(function (object $row) use ($catalog): array {
+            $service = $catalog[$row->source_id];
+            $calls = (int) $row->calls;
+            $failed = (int) $row->client_errors + (int) $row->server_errors;
+
+            return [
+                'route' => $row->name,
+                'calls' => $calls,
+                'client_errors' => (int) $row->client_errors,
+                'server_errors' => (int) $row->server_errors,
+                'error_rate' => $calls > 0 ? round(100 * $failed / $calls, 2) : 0.0,
+                'avg_ms' => Rollups::ms($row->average_us),
+                'p95_ms' => Rollups::ms($row->p95_us),
+                'project' => $service->project,
+                'service' => Sources::key($service),
+                'service_label' => $service->label,
+            ];
+        })->all();
+    }
+
     public function queryDetail(Window $window, object $service, string $fingerprint): ?array
     {
         $spans = $this->spans($window, collect([$service]))->where('kind', 'query')->where('query_fingerprint', $fingerprint);

@@ -17,6 +17,9 @@ final class OtlpTraceDecoder
         'lookout.operation.name',
         'lookout.progress',
         'lookout.query.template',
+        'http.request.method',
+        'http.route',
+        'http.response.status_code',
     ];
 
     /** @return Generator<array> */
@@ -40,6 +43,7 @@ final class OtlpTraceDecoder
                             $attributes[$key] = match ($value->getValue()) {
                                 'string_value' => $value->getStringValue(),
                                 'bool_value' => $value->getBoolValue(),
+                                'int_value' => (int) $value->getIntValue(),
                                 default => null,
                             };
                         }
@@ -81,7 +85,10 @@ final class OtlpTraceDecoder
                     foreach ($this->list($span, 'attributes') as $attribute) {
                         $key = $attribute->key ?? null;
                         if (in_array($key, self::ATTRIBUTES, true)) {
-                            $attributes[$key] = $attribute->value->stringValue ?? $attribute->value->boolValue ?? null;
+                            // OTLP JSON encodes 64-bit integers as strings.
+                            $int = $attribute->value->intValue ?? null;
+                            $attributes[$key] = $attribute->value->stringValue ?? $attribute->value->boolValue
+                                ?? (is_int($int) || (is_string($int) && ctype_digit($int)) ? (int) $int : null);
                         }
                     }
 

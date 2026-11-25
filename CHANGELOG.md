@@ -4,6 +4,14 @@ All notable changes to Lookout are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
+### Added
+
+- HTTP routes from OpenTelemetry services. A server span with `http.request.method`, `http.route` and `http.response.status_code` is stored as a request named `GET /stocks/{symbol}`: the method and the route template, never the raw URL. A 5xx answer or an error status counts as a server error, a 4xx answer as a client error.
+- MCP `slow_routes` takes `project`, `service` and `environment` like `slow_queries` and lists the routes of OpenTelemetry services next to the NightOwl ones, each row with its service.
+- A sources migration adds the nullable `status_code` column to `lookout_spans`. PostgreSQL adds it without rewriting the table.
+
 ## [0.4.2] - 2026-11-24
 
 ### Fixed

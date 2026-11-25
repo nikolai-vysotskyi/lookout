@@ -169,6 +169,47 @@ final class OtlpIngestTest extends TestCase
         ]]))->assertStatus(503)->assertHeader('Retry-After', '5');
     }
 
+    public function test_otlp_server_spans_become_routes_with_their_status_and_never_keep_the_raw_url(): void
+    {
+        $start = (time() - 1) * 1_000_000_000;
+        $span = fn (string $id, array $attributes, array $extra = []): array => array_replace([
+            'traceId' => str_repeat('12', 16),
+            'spanId' => str_repeat($id, 8),
+            'kind' => 2,
+            'startTimeUnixNano' => (string) $start,
+            'endTimeUnixNano' => (string) ($start + 250_000_000),
+            'name' => 'GET /stocks/AAPL?token=private',
+            'attributes' => $attributes,
+        ], $extra);
+        $http = fn (string $method, string $route, int|string $status): array => [
+            ['key' => 'http.request.method', 'value' => ['stringValue' => $method]],
+            ['key' => 'http.route', 'value' => ['stringValue' => $route]],
+            ['key' => 'http.response.status_code', 'value' => ['intValue' => $status]],
+            ['key' => 'url.full', 'value' => ['stringValue' => 'https://example.test/stocks/AAPL?token=private']],
+        ];
+
+        $this->export($this->token, $this->jsonSpans([
+            $span('a1', $http('GET', '/stocks/[symbol]', '200')),
+            $span('a2', $http('GET', '/stocks/[symbol]', 404)),
+            $span('a3', $http('POST', '/api/_rum', 502)),
+            // Not a route: a raw URL with a query string, an unknown method, a client span.
+            $span('a4', $http('GET', '/stocks/AAPL?token=private', 200)),
+            $span('a5', $http('BREW', '/coffee', 200)),
+            $span('a6', $http('GET', '/stocks/[symbol]', 200), ['kind' => 3]),
+        ]))->assertOk();
+
+        $rows = DB::table('lookout_spans')->orderBy('span_id')->get()->keyBy('span_id');
+        $this->assertSame(['request', 'GET /stocks/[symbol]', 200, 0], [$rows[str_repeat('a1', 8)]->kind, $rows[str_repeat('a1', 8)]->name, (int) $rows[str_repeat('a1', 8)]->status_code, (int) $rows[str_repeat('a1', 8)]->error]);
+        $this->assertSame([404, 0], [(int) $rows[str_repeat('a2', 8)]->status_code, (int) $rows[str_repeat('a2', 8)]->error]);
+        $this->assertSame(['POST /api/_rum', 502, 1], [$rows[str_repeat('a3', 8)]->name, (int) $rows[str_repeat('a3', 8)]->status_code, (int) $rows[str_repeat('a3', 8)]->error]);
+        foreach (['a4', 'a5', 'a6'] as $id) {
+            $this->assertSame('operation', $rows[str_repeat($id, 8)]->kind);
+            $this->assertNull($rows[str_repeat($id, 8)]->status_code);
+        }
+        $this->assertSame(250_000, (int) $rows[str_repeat('a1', 8)]->duration_us);
+        $this->assertFalse(DB::table('lookout_spans')->where('name', 'like', '%private%')->exists());
+    }
+
     private function export(string $token, string $body, string $type = 'application/json', string $encoding = 'identity')
     {
         return $this->call('POST', '/lookout/v1/traces', server: [
